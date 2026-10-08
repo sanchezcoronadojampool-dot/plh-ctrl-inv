@@ -1,0 +1,3 @@
+-- Deprecated: PostgreSQL schema setup is managed by Flyway.
+-- See db/migration/V1__initial_inventory.sql and subsequent versioned migrations.
+-- This file is intentionally not configured as a Spring SQL initializer.

@@ -1,0 +1,419 @@
+<main class="app-shell" *ngIf="currentUser; else loginView">
+  <aside class="sidebar">
+    <a class="brand" href="#" (click)="$event.preventDefault(); navigate('dashboard')">
+      <img class="brand-logo" src="assets/logo-playa-la-honda.png" alt="Condominio Playa La Honda" />
+      <span class="brand-copy"><strong>Inventario</strong><small>Gestión del condominio</small></span>
+    </a>
+    <nav class="nav-menu" aria-label="Navegación principal">
+      <button class="nav-btn" [class.active]="activeSection === 'dashboard'" (click)="navigate('dashboard')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 9-8 9 8v9a1 1 0 0 1-1 1h-5v-7h-6v7H4a1 1 0 0 1-1-1z"/></svg>Dashboard
+      </button>
+      <button class="nav-btn" [class.active]="activeSection === 'products'" (click)="navigate('products')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v13H4zM8 7V5a4 4 0 0 1 8 0v2m-8 5h8"/></svg>Productos
+      </button>
+      <button class="nav-btn" [class.active]="activeSection === 'movements'" (click)="navigate('movements')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h13m0 0-4-4m4 4-4 4M17 17H4m0 0 4-4m-4 4 4 4"/></svg>Entradas / Salidas
+      </button>
+      <button class="nav-btn" [class.active]="activeSection === 'assets'" (click)="navigate('assets')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zm4 0h2v6h-2zm-4 4h2v2h-2z"/></svg>Activos y QR
+      </button>
+      <button class="nav-btn" [class.active]="activeSection === 'loans'" (click)="navigate('loans')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8m-8 4h5m5 7v-3"/></svg>Préstamos
+      </button>
+      <button *ngIf="isAdministrator" class="nav-btn" [class.active]="activeSection === 'users'" (click)="navigate('users')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0m2-13a4 4 0 0 1 0 8m2 2a6 6 0 0 1 2 3"/></svg>Usuarios
+      </button>
+      <button class="nav-btn" [class.active]="activeSection === 'reports'" (click)="navigate('reports')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10m8 10V4m8 16v-7M2 20h20"/></svg>Reportes
+      </button>
+    </nav>
+    <div class="sidebar-foot"><span class="connection-dot" [class.offline]="!!errorMessage" [class.connecting]="loading"></span>{{ loading ? 'Conectando con la API' : errorMessage ? 'API no disponible' : 'Conectado a la API' }}</div>
+  </aside>
+
+  <section class="main-content">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Administración del condominio</p>
+        <h1>{{ sectionTitle }}</h1>
+      </div>
+      <div class="session-controls"><span>{{ currentUser.fullName }} · {{ currentUser.jobTitle }}</span><button class="secondary-btn" type="button" (click)="logout()">Cerrar sesión</button></div>
+      <button class="icon-refresh" type="button" (click)="loadAll()" aria-label="Actualizar datos" title="Actualizar datos">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.6 9a7 7 0 0 1 11.7-2L20 12M4 12l2.7 5a7 7 0 0 0 11.7-2"/></svg>
+      </button>
+    </header>
+
+    <div *ngIf="successMessage" class="alert success-alert" role="status">{{ successMessage }}</div>
+    <div *ngIf="loading" class="loading-bar" role="status">Cargando información del inventario…</div>
+
+    <ng-container *ngIf="activeSection === 'dashboard'">
+      <section class="kpi-grid" aria-label="Indicadores">
+        <article class="stat-card stat-blue"><div class="stat-label"><span class="stat-icon">▦</span>Total productos</div><strong>{{ dashboard.totalProducts }}</strong><small>Productos registrados</small></article>
+        <article class="stat-card stat-indigo"><div class="stat-label"><span class="stat-icon">▤</span>Existencias por unidad</div><strong class="stock-summary">{{ stockSummary }}</strong><small>No se suman unidades incompatibles</small></article>
+        <article class="stat-card stat-red"><div class="stat-label"><span class="stat-icon">!</span>Stock bajo</div><strong>{{ dashboard.lowStockCount }}</strong><small>Requieren reposición</small></article>
+        <article class="stat-card stat-green"><div class="stat-label"><span class="stat-icon">↕</span>Movimientos hoy</div><strong>{{ dashboard.movementsToday }}</strong><small>Entradas y salidas</small></article>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div><h2>Actividad reciente</h2><p>Últimos movimientos registrados en el almacén</p></div>
+          <button class="text-button" type="button" (click)="navigate('movements')">Ver movimientos →</button>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Producto</th><th>Tipo</th><th>Cantidad</th><th>Usuario</th><th>Fecha</th></tr></thead>
+            <tbody>
+              <tr *ngFor="let movement of movements.slice(0, 5)">
+                <td class="primary-cell">{{ movement.productName }}</td>
+                <td><span class="status" [class.incoming]="movement.type === 'ENTRADA'" [class.outgoing]="movement.type === 'SALIDA'">{{ movement.type === 'ENTRADA' ? 'Entrada' : 'Salida' }}</span></td>
+                <td>{{ movement.quantity }}</td><td>{{ movement.userName }}</td><td>{{ movement.movementDate | date:'dd/MM/yyyy' }}</td>
+              </tr>
+              <tr *ngIf="!movements.length"><td colspan="5" class="empty-state">Aún no hay movimientos registrados.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="panel low-stock-panel">
+        <div class="section-heading"><div><h2>Productos que requieren atención</h2><p>Stock igual o menor al mínimo configurado</p></div><button class="text-button" type="button" (click)="navigate('products')">Ver productos →</button></div>
+        <div class="low-stock-list">
+          <div class="low-stock-item" *ngFor="let product of lowStockProducts.slice(0, 4)">
+            <span class="product-avatar">{{ product.name.slice(0, 1) }}</span><span class="low-product-name"><strong>{{ product.name }}</strong><small>{{ product.code }} · Mínimo {{ product.minimumStock }} {{ product.unit }}</small></span><span class="stock-pill low">{{ product.stock }} {{ product.unit }}</span>
+          </div>
+          <p *ngIf="!lowStockProducts.length" class="empty-state">Todos los productos tienen stock suficiente.</p>
+        </div>
+      </section>
+    </ng-container>
+
+    <ng-container *ngIf="activeSection === 'products'">
+      <section class="panel">
+        <div class="section-heading section-heading-wrap">
+          <div><h2>Productos</h2><p>Inventario completo y niveles de existencia</p></div>
+          <button *ngIf="isAdministrator" class="primary-btn" type="button" (click)="startNewProduct()">+ Nuevo producto</button>
+        </div>
+        <div class="toolbar">
+          <label class="search-box"><span aria-hidden="true">⌕</span><input [(ngModel)]="productSearch" (ngModelChange)="page = 1" placeholder="Buscar producto o código" aria-label="Buscar producto" /></label>
+          <select [(ngModel)]="categoryFilter" (ngModelChange)="page = 1" aria-label="Filtrar por categoría"><option value="">Todas las categorías</option><option *ngFor="let category of categories" [value]="category">{{ category }}</option></select>
+          <span class="toolbar-count">{{ filteredProducts.length }} productos</span>
+        </div>
+        <div class="table-scroll">
+          <table class="product-table">
+            <thead><tr>
+              <th class="check-cell"><input type="checkbox" [checked]="allVisibleSelected" (change)="toggleAllVisible($event)" aria-label="Seleccionar todos los productos visibles" /></th>
+              <th><button class="sort-button" (click)="sortBy('code')">Código <span>{{ sortIndicator('code') }}</span></button></th>
+              <th><button class="sort-button" (click)="sortBy('name')">Producto <span>{{ sortIndicator('name') }}</span></button></th>
+              <th><button class="sort-button" (click)="sortBy('category')">Categoría <span>{{ sortIndicator('category') }}</span></button></th>
+              <th><button class="sort-button" (click)="sortBy('stock')">Stock <span>{{ sortIndicator('stock') }}</span></button></th>
+              <th>Ubicación</th><th>Estado</th><th>Acciones</th>
+            </tr></thead>
+            <tbody>
+              <tr *ngFor="let product of pagedProducts">
+                <td class="check-cell"><input type="checkbox" [checked]="selectedIds.has(product.id!)" (change)="toggleSelection(product.id!, $event)" [attr.aria-label]="'Seleccionar ' + product.name" /></td>
+                <td class="code-cell">{{ product.code }}</td>
+                <td><div class="product-cell"><span class="product-avatar">{{ product.name.slice(0, 1) }}</span><strong>{{ product.name }}</strong></div></td>
+                <td>{{ product.category }}</td>
+                <td><span class="stock-pill" [class.zero]="product.stock === 0" [class.low]="product.stock > 0 && product.stock <= product.minimumStock" [class.ok]="product.stock > product.minimumStock">{{ product.stock }} {{ product.unit }}</span></td>
+                <td>{{ product.location }}</td>
+                <td><span class="status" [class.incoming]="product.stock > product.minimumStock" [class.warning-status]="product.stock > 0 && product.stock <= product.minimumStock" [class.neutral-status]="product.stock === 0">{{ product.stock === 0 ? 'Agotado' : product.stock <= product.minimumStock ? 'Stock bajo' : 'Disponible' }}</span></td>
+                <td><div class="row-actions">
+                  <button type="button" class="action-btn detail-btn" (click)="showProductDetails(product)" title="Detalle" aria-label="Detalle">⌕</button>
+                  <button *ngIf="isAdministrator" type="button" class="action-btn edit-btn" (click)="editProduct(product)" title="Editar" aria-label="Editar">✎</button>
+                  <button *ngIf="isAdministrator" type="button" class="action-btn delete-btn" (click)="deleteProduct(product)" title="Eliminar" aria-label="Eliminar">×</button>
+                </div></td>
+              </tr>
+              <tr *ngIf="!filteredProducts.length"><td colspan="8" class="empty-state">No se encontraron productos.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="table-footer">
+          <span>Mostrando {{ filteredProducts.length ? (page - 1) * pageSize + 1 : 0 }}–{{ Math.min(page * pageSize, filteredProducts.length) }} de {{ filteredProducts.length }}</span>
+          <div class="pagination"><button type="button" [disabled]="page <= 1" (click)="page = page - 1">Anterior</button><span>Página {{ page }} de {{ totalPages }}</span><button type="button" [disabled]="page >= totalPages" (click)="page = page + 1">Siguiente</button></div>
+        </div>
+      </section>
+
+      <div class="modal-backdrop" *ngIf="showProductForm" (click)="showProductForm = false">
+        <section class="detail-modal form-dialog" role="dialog" aria-modal="true" aria-labelledby="product-form-title" (click)="$event.stopPropagation()">
+        <button class="modal-close" type="button" (click)="showProductForm = false" aria-label="Cerrar">×</button>
+        <div class="section-heading"><div><h2 id="product-form-title">{{ editingProductId ? 'Editar producto' : 'Registrar producto' }}</h2><p>Los cambios se guardan en la base de datos</p></div></div>
+        <form class="form-grid product-form" (ngSubmit)="saveProduct()">
+          <label><span>Código</span><input name="productCode" [(ngModel)]="productForm.code" required maxlength="40" /></label>
+          <label><span>Nombre</span><input name="productName" [(ngModel)]="productForm.name" required maxlength="120" /></label>
+          <label><span>Categoría</span><input name="productCategory" [(ngModel)]="productForm.category" required maxlength="80" /></label>
+          <label><span>Tipo de seguimiento</span><select name="productTrackingType" [(ngModel)]="productForm.trackingType" required><option value="CONSUMABLE">Consumible</option><option value="REUSABLE">Reutilizable / préstamo</option><option value="ASSET">Activo individual con QR</option><option value="FUEL">Combustible (galones)</option></select></label>
+          <label><span>Stock actual</span><input name="productStock" type="number" min="0" step="0.001" [(ngModel)]="productForm.stock" readonly required /><small>Registra compras y salidas desde Movimientos; así queda un saldo auditable.</small></label>
+          <label><span>Stock mínimo</span><input name="productMinimum" type="number" min="0" [(ngModel)]="productForm.minimumStock" required /></label>
+          <label><span>Unidad</span><input name="productUnit" [(ngModel)]="productForm.unit" required maxlength="40" placeholder="pza, caja…" /></label>
+          <label><span>Ubicación</span><input name="productLocation" [(ngModel)]="productForm.location" required maxlength="80" /></label>
+          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving">{{ saving ? 'Guardando…' : editingProductId ? 'Guardar cambios' : 'Guardar producto' }}</button></div>
+        </form>
+        </section>
+      </div>
+    </ng-container>
+
+    <ng-container *ngIf="activeSection === 'movements'">
+      <section class="panel">
+        <div class="section-heading"><div><h2>Movimientos de almacén</h2><p>Entradas, entregas, consumos y combustible con cantidades fraccionarias</p></div><button class="primary-btn" type="button" (click)="showMovementForm = true">+ Registrar movimiento</button></div>
+      </section>
+      <div class="modal-backdrop" *ngIf="showMovementForm" (click)="showMovementForm = false">
+        <section class="detail-modal form-dialog" role="dialog" aria-modal="true" aria-labelledby="movement-form-title" (click)="$event.stopPropagation()">
+        <button class="modal-close" type="button" (click)="showMovementForm = false" aria-label="Cerrar">×</button>
+        <div class="section-heading"><div><h2 id="movement-form-title">Registrar movimiento</h2><p>El stock se actualizará automáticamente al guardar</p></div></div>
+        <form class="form-grid movement-form" (ngSubmit)="saveMovement()">
+          <label><span>Producto</span><select name="movementProduct" [(ngModel)]="movementForm.productId" required><option [ngValue]="0" disabled>Selecciona un producto</option><option *ngFor="let product of movementProducts" [ngValue]="product.id">{{ product.code }} · {{ product.name }} ({{ product.stock }} {{ product.unit }})</option></select></label>
+          <label><span>Tipo de movimiento</span><select name="movementType" [(ngModel)]="movementForm.type" (ngModelChange)="movementTypeChanged()" required><option value="ENTRADA">Entrada / compra</option><option value="SALIDA">Salida / entrega</option></select></label>
+          <label><span>Cantidad ({{ selectedMovementProduct?.unit || 'unidades' }})</span><input name="movementQuantity" type="number" min="0.001" [step]="selectedMovementProduct?.trackingType === 'ASSET' ? '1' : '0.001'" [(ngModel)]="movementForm.quantity" required /></label>
+          <label><span>Registrado por</span><input [value]="currentUser.fullName" readonly /></label>
+          <label><span>Entregado a</span><select name="movementRecipient" [(ngModel)]="movementForm.recipientId" [required]="movementForm.type === 'SALIDA'"><option [ngValue]="undefined">— Selecciona destinatario —</option><option *ngFor="let user of users" [ngValue]="user.id">{{ user.fullName }} · {{ user.jobTitle }}</option></select></label>
+          <label><span>Área destino</span><select name="movementArea" [(ngModel)]="movementForm.areaId"><option [ngValue]="undefined">— No especificada —</option><option *ngFor="let area of areas" [ngValue]="area.id">{{ area.name }}</option></select></label>
+          <label><span>Fecha</span><input name="movementDate" type="date" [(ngModel)]="movementForm.movementDate" required /></label>
+          <label *ngIf="selectedMovementProduct?.trackingType === 'FUEL' && movementForm.type === 'SALIDA'"><span>Vehículo o equipo abastecido</span><input name="fuelEquipment" [(ngModel)]="movementForm.vehicleEquipment" required maxlength="120" placeholder="Vehículo, generador, equipo…" /></label>
+          <label class="span-two"><span>Motivo / uso</span><input name="movementReason" [(ngModel)]="movementForm.reason" [required]="selectedMovementProduct?.trackingType === 'FUEL' && movementForm.type === 'SALIDA'" maxlength="200" placeholder="Compra, limpieza de baño, combustible para…" /></label>
+          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving || !products.length || !users.length">{{ saving ? 'Guardando…' : 'Registrar movimiento' }}</button></div>
+        </form>
+        </section>
+      </div>
+      <section class="panel">
+        <div class="section-heading"><div><h2>Historial de movimientos</h2><p>Registro de entradas y salidas del inventario</p></div></div>
+        <div class="table-scroll"><table><thead><tr><th>Fecha</th><th>Producto</th><th>Tipo</th><th>Cantidad</th><th>Responsable</th><th>Motivo</th></tr></thead>
+          <tbody><tr *ngFor="let movement of movements"><td>{{ movement.movementDate | date:'dd/MM/yyyy' }}</td><td class="primary-cell">{{ movement.productName }}</td><td><span class="status" [class.incoming]="movement.type === 'ENTRADA'" [class.outgoing]="movement.type === 'SALIDA'">{{ movement.type === 'ENTRADA' ? 'Entrada' : 'Salida' }}</span></td><td>{{ movement.quantity }}</td><td>{{ movement.userName }}</td><td>{{ movement.reason || '—' }}</td></tr><tr *ngIf="!movements.length"><td colspan="6" class="empty-state">Aún no hay movimientos.</td></tr></tbody>
+        </table></div>
+      </section>
+    </ng-container>
+
+    <ng-container *ngIf="activeSection === 'assets'">
+      <section class="panel">
+        <div class="section-heading"><div><h2>Áreas y ubicaciones</h2><p>Organiza la custodia por cámaras, administración, baños, almacén u otras áreas</p></div><button *ngIf="isAdministrator" class="primary-btn" type="button" (click)="showAreaForm = true">+ Nueva área</button></div>
+        <div class="area-chips"><span *ngFor="let area of areas">{{ area.name }}</span></div>
+      </section>
+      <div class="modal-backdrop" *ngIf="showAreaForm" (click)="showAreaForm = false">
+        <section class="detail-modal form-dialog" role="dialog" aria-modal="true" aria-labelledby="area-form-title" (click)="$event.stopPropagation()">
+          <button class="modal-close" type="button" (click)="showAreaForm = false" aria-label="Cerrar">×</button>
+          <p class="eyebrow">Configuración de ubicaciones</p><h2 id="area-form-title">Registrar área</h2>
+          <form class="form-grid modal-form" (ngSubmit)="saveArea()">
+            <label><span>Nombre del área</span><input name="areaName" [(ngModel)]="areaForm.name" required maxlength="100" placeholder="Ej. Taller" /></label>
+            <label><span>Descripción</span><input name="areaDescription" [(ngModel)]="areaForm.description" maxlength="200" /></label>
+            <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving">Crear área</button></div>
+          </form>
+        </section>
+      </div>
+      <section class="panel">
+        <div class="section-heading"><div><h2>Activos serializados</h2><p>Asigna un responsable, ubicación y código QR individual</p></div><button class="primary-btn" type="button" (click)="showAssetForm = true">+ Registrar activo</button></div>
+      </section>
+      <div class="modal-backdrop" *ngIf="showAssetForm" (click)="showAssetForm = false">
+        <section class="detail-modal form-dialog" role="dialog" aria-modal="true" aria-labelledby="asset-form-title" (click)="$event.stopPropagation()">
+        <button class="modal-close" type="button" (click)="showAssetForm = false" aria-label="Cerrar">×</button>
+        <div class="section-heading"><div><h2 id="asset-form-title">Registrar activo individual</h2><p>Asigna código, serie, custodio y ubicación; se genera una ficha QR</p></div></div>
+        <form class="form-grid modal-form" (ngSubmit)="saveAsset()">
+          <label><span>Producto serializado</span><select name="assetProduct" [(ngModel)]="assetForm.productId" required><option [ngValue]="0" disabled>Selecciona</option><option *ngFor="let product of assetProducts" [ngValue]="product.id">{{ product.code }} · {{ product.name }}</option></select></label>
+          <label><span>Código del activo</span><input name="assetCode" [(ngModel)]="assetForm.assetCode" required maxlength="60" placeholder="RADIO-001" /></label>
+          <label><span>Número de serie</span><input name="assetSerial" [(ngModel)]="assetForm.serialNumber" maxlength="100" /></label>
+          <label><span>Área / ubicación</span><select name="assetArea" [(ngModel)]="assetForm.areaId" required><option [ngValue]="0" disabled>Selecciona</option><option *ngFor="let area of areas" [ngValue]="area.id">{{ area.name }}</option></select></label>
+          <label><span>Responsable actual</span><select name="assetResponsible" [(ngModel)]="assetForm.responsibleId" required><option [ngValue]="0" disabled>Selecciona</option><option *ngFor="let user of users" [ngValue]="user.id">{{ user.fullName }}</option></select></label>
+          <label><span>Condición</span><select name="assetCondition" [(ngModel)]="assetForm.condition"><option *ngFor="let condition of conditions" [ngValue]="condition">{{ conditionLabel(condition) }}</option></select></label>
+          <label><span>Registrado por</span><input [value]="currentUser.fullName" readonly /></label>
+          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving || !assetProducts.length || !users.length || !areas.length">Registrar activo y QR</button></div>
+        </form>
+        </section>
+      </div>
+      <section class="panel">
+        <div class="section-heading"><div><h2>Activos trazables</h2><p>{{ assets.length }} unidades registradas · abrir el detalle para ver custodio e historial</p></div></div>
+        <div class="toolbar"><label class="search-box"><span>⌕</span><input [(ngModel)]="assetSearch" placeholder="Buscar código, producto, área o responsable" aria-label="Buscar activo" /></label><span class="toolbar-count">{{ filteredAssets.length }} activos</span></div>
+        <div class="table-scroll"><table><thead><tr><th>Código / Serie</th><th>Producto</th><th>Estado</th><th>Condición</th><th>Ubicación</th><th>Responsable</th><th>Ficha QR</th><th></th></tr></thead>
+          <tbody><tr *ngFor="let asset of filteredAssets">
+            <td><strong>{{ asset.assetCode }}</strong><br /><small>{{ asset.serialNumber || 'Sin serie' }}</small></td><td>{{ asset.productName }}</td>
+            <td><span class="status" [class.incoming]="asset.status === 'ASSIGNED' || asset.status === 'IN_STOCK'" [class.outgoing]="asset.status === 'ON_LOAN'">{{ statusLabel(asset.status) }}</span></td>
+            <td>{{ conditionLabel(asset.condition) }}</td><td>{{ asset.areaName || '—' }}</td><td>{{ asset.responsibleName || '—' }}</td>
+            <td><button class="secondary-btn" type="button" (click)="showAssetQr(asset)">Ver / imprimir QR</button></td>
+            <td><button class="text-button" type="button" (click)="startAssignAsset(asset)" [disabled]="asset.status === 'ON_LOAN' || asset.status === 'RETIRED'">Asignar</button><button class="text-button" type="button" (click)="openAssetDetail(asset)">Historial</button></td>
+          </tr><tr *ngIf="!filteredAssets.length"><td colspan="8" class="empty-state">No hay activos serializados para mostrar.</td></tr></tbody>
+        </table></div>
+      </section>
+    </ng-container>
+
+    <ng-container *ngIf="activeSection === 'loans'">
+      <section class="panel">
+        <div class="section-heading"><div><h2>Préstamos y devoluciones</h2><p>Las devoluciones guardan cantidades y condición del artículo recibido</p></div><button class="primary-btn" type="button" (click)="showLoanForm = true">+ Nuevo préstamo</button></div>
+      </section>
+      <div class="modal-backdrop" *ngIf="showLoanForm" (click)="showLoanForm = false">
+        <section class="detail-modal form-dialog" role="dialog" aria-modal="true" aria-labelledby="loan-form-title" (click)="$event.stopPropagation()">
+        <button class="modal-close" type="button" (click)="showLoanForm = false" aria-label="Cerrar">×</button>
+        <div class="section-heading"><div><h2 id="loan-form-title">Registrar préstamo</h2><p>Herramientas reutilizables o activos serializados</p></div></div>
+        <form class="form-grid modal-form" (ngSubmit)="issueLoan()">
+          <label><span>Persona que recibe</span><select name="loanBorrower" [(ngModel)]="loanForm.borrowerId" required><option *ngFor="let user of users" [ngValue]="user.id">{{ user.fullName }} · {{ user.jobTitle }}</option></select></label>
+          <label><span>Entregado por</span><input [value]="currentUser.fullName" readonly /></label>
+          <label><span>Área de uso</span><select name="loanArea" [(ngModel)]="loanForm.areaId" required><option *ngFor="let area of areas" [ngValue]="area.id">{{ area.name }}</option></select></label>
+          <label><span>Producto</span><select name="loanProduct" [(ngModel)]="loanProductId" required><option *ngFor="let product of loanProducts" [ngValue]="product.id">{{ product.code }} · {{ product.name }} ({{ product.trackingType === 'ASSET' ? product.availableStock : product.stock }} disponible)</option></select></label>
+          <label *ngIf="selectedLoanProduct?.trackingType !== 'ASSET'"><span>Cantidad</span><input name="loanQuantity" type="number" min="0.001" step="0.001" [(ngModel)]="loanQuantity" required /></label>
+          <label><span>Fecha límite de devolución (opcional)</span><input name="loanDueAt" type="date" [(ngModel)]="loanForm.dueAt" /></label>
+          <label class="span-two"><span>Propósito</span><input name="loanPurpose" [(ngModel)]="loanForm.purpose" required maxlength="200" placeholder="Mantenimiento de luminaria, poda, trabajo asignado…" /></label>
+          <div class="span-two" *ngIf="selectedLoanProduct?.trackingType === 'ASSET'"><span class="field-label">Unidades disponibles</span>
+            <div class="selection-list"><label *ngFor="let asset of availableLoanAssets"><input type="checkbox" [checked]="loanAssetIds.has(asset.id)" (change)="toggleLoanAsset(asset.id, $event)" />{{ asset.assetCode }} · {{ asset.productName }} · {{ asset.areaName }} · {{ conditionLabel(asset.condition) }}</label><span *ngIf="!availableLoanAssets.length">No hay unidades disponibles.</span></div>
+          </div>
+          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving || !loanProducts.length || !areas.length || !users.length">Registrar préstamo</button></div>
+        </form>
+        </section>
+      </div>
+      <section class="panel">
+        <div class="section-heading"><div><h2>Historial y pendientes</h2><p>Control de salida, devolución parcial, responsable y condición</p></div></div>
+        <div class="loan-list"><article class="loan-card" *ngFor="let loan of loans">
+          <div class="loan-heading"><div><strong>{{ loan.loanNumber }}</strong><span>{{ loan.borrowerName }} · {{ loan.purpose }}</span></div><span class="status" [class.incoming]="loan.status === 'CLOSED'" [class.outgoing]="loan.status !== 'CLOSED'">{{ loan.status === 'CLOSED' ? 'Cerrado' : loan.status === 'PARTIALLY_RETURNED' ? 'Devolución parcial' : 'Pendiente' }}</span></div>
+          <div class="loan-line" *ngFor="let line of loan.items"><div><strong>{{ line.productName }}</strong><span>{{ line.outstandingQuantity }} pendiente(s) de {{ line.quantity }} · Condición de salida: {{ conditionLabel(line.conditionOut) }}</span>
+            <small *ngFor="let asset of line.assets">{{ asset.assetCode }} · {{ statusLabel(asset.status) }} · {{ conditionLabel(asset.condition) }}</small></div>
+            <button *ngIf="line.outstandingQuantity > 0" class="secondary-btn" type="button" (click)="startReturn(loan, line)">Registrar devolución</button>
+          </div>
+          <small>Entregado por {{ loan.issuedByName }} · {{ loan.areaName }} · {{ loan.issuedAt | date:'dd/MM/yyyy' }}<span *ngIf="loan.dueAt"> · Límite {{ loan.dueAt | date:'dd/MM/yyyy' }}</span></small>
+        </article><p *ngIf="!loans.length" class="empty-state">Aún no se han registrado préstamos.</p></div>
+      </section>
+    </ng-container>
+
+    <ng-container *ngIf="activeSection === 'users'">
+      <section class="panel">
+        <div class="section-heading"><div><h2>Usuarios y permisos</h2><p>Gestiona a las personas autorizadas para operar el almacén</p></div><button class="primary-btn" type="button" (click)="resetUserForm(); showUserForm = true">+ Nuevo usuario</button></div>
+      </section>
+      <div class="modal-backdrop" *ngIf="showUserForm" (click)="showUserForm = false">
+        <section class="detail-modal form-dialog" role="dialog" aria-modal="true" aria-labelledby="user-form-title" (click)="$event.stopPropagation()">
+        <button class="modal-close" type="button" (click)="showUserForm = false" aria-label="Cerrar">×</button>
+        <div class="section-heading"><div><h2 id="user-form-title">{{ editingUserId ? 'Editar usuario' : 'Registrar usuario' }}</h2><p>Personas autorizadas para movimientos y custodia</p></div></div>
+        <form class="form-grid user-form" (ngSubmit)="saveUser()">
+          <label><span>Nombre completo</span><input name="userName" [(ngModel)]="userForm.fullName" required maxlength="120" /></label>
+          <label><span>Función / cargo</span><input name="userJobTitle" [(ngModel)]="userForm.jobTitle" required maxlength="80" /></label>
+          <label><span>Permiso del sistema</span><select name="userRole" [(ngModel)]="userForm.role" required><option value="ADMIN">Administrador</option><option value="INVENTORY_MANAGER">Operador de inventario</option><option value="VIEWER">Solo consulta</option></select></label>
+          <label><span>Email de acceso</span><input name="userEmail" type="email" [(ngModel)]="userForm.email" required maxlength="120" /></label>
+          <label><span>Contraseña temporal {{ editingUserId ? '(vacío = conservar; requerida para reactivar)' : '(mínimo 12 caracteres)' }}</span><input name="userPassword" type="password" [(ngModel)]="userForm.password" [required]="!editingUserId || userForm.enabled === false" minlength="12" maxlength="72" autocomplete="new-password" /></label>
+          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving">{{ editingUserId ? 'Guardar cambios' : 'Agregar usuario' }}</button></div>
+        </form>
+        </section>
+      </div>
+      <section class="user-grid">
+        <article class="user-card" *ngFor="let user of accountUsers">
+          <span class="user-avatar">{{ initials(user.fullName) }}</span><div class="user-info"><strong>{{ user.fullName }}</strong><span>{{ user.jobTitle }} · {{ user.role }}</span><small>{{ user.email }}</small></div>
+          <div class="user-actions"><button type="button" class="secondary-btn" (click)="editUser(user)">{{ user.enabled === false ? 'Reactivar / editar' : 'Editar' }}</button><button *ngIf="user.enabled !== false" type="button" class="danger-outline-btn" (click)="deleteUser(user)">Desactivar</button></div>
+        </article>
+        <p *ngIf="!accountUsers.length" class="panel empty-state">No hay usuarios registrados.</p>
+      </section>
+    </ng-container>
+
+    <ng-container *ngIf="activeSection === 'reports'">
+      <section class="panel report-controls">
+        <div class="section-heading"><div><h2>Reportes de movimientos</h2><p>Filtra por fechas y categoría, y exporta el resultado</p></div></div>
+        <div class="report-filters">
+          <label><span>Desde</span><input type="date" [(ngModel)]="reportStart" /></label>
+          <label><span>Hasta</span><input type="date" [(ngModel)]="reportEnd" /></label>
+          <label><span>Categoría</span><select [(ngModel)]="reportCategory"><option value="">Todas las categorías</option><option *ngFor="let category of categories" [value]="category">{{ category }}</option></select></label>
+          <button class="secondary-btn" type="button" (click)="resetReportFilters()">Limpiar filtros</button>
+          <div class="export-actions"><button class="secondary-btn" type="button" (click)="printReport()">Imprimir / PDF</button><button class="primary-btn" type="button" (click)="downloadExcel()">Exportar Excel (.csv)</button></div>
+        </div>
+      </section>
+      <section class="panel report-print-area">
+        <header class="report-print-header">
+          <img src="assets/logo-playa-la-honda.png" alt="Condominio Playa La Honda" />
+          <div><p class="report-print-kicker">Condominio Playa La Honda</p><h1>Reporte de movimientos</h1><p>Gestión y control de inventario</p></div>
+          <small>Generado: {{ reportGeneratedAt }}</small>
+        </header>
+        <div class="report-print-summary">
+          <span><strong>Período:</strong> {{ reportStart || 'Inicio' }} — {{ reportEnd || 'Actualidad' }}</span>
+          <span><strong>Categoría:</strong> {{ reportCategory || 'Todas' }}</span>
+          <span><strong>Registros:</strong> {{ filteredMovements.length }}</span>
+        </div>
+        <div class="section-heading"><div><h2>Resultados</h2><p>{{ filteredMovements.length }} movimientos encontrados</p></div></div>
+        <div class="table-scroll"><table id="report-table"><thead><tr><th>Fecha</th><th>Producto</th><th>Categoría</th><th>Tipo</th><th>Cantidad</th><th>Responsable</th><th>Motivo</th></tr></thead>
+          <tbody><tr *ngFor="let movement of filteredMovements"><td>{{ movement.movementDate | date:'dd/MM/yyyy' }}</td><td>{{ movement.productName }}</td><td>{{ categoryForMovement(movement) }}</td><td>{{ movement.type === 'ENTRADA' ? 'Entrada' : 'Salida' }}</td><td>{{ movement.quantity }}</td><td>{{ movement.userName }}</td><td>{{ movement.reason || '—' }}</td></tr><tr *ngIf="!filteredMovements.length"><td colspan="7" class="empty-state">No hay movimientos para los filtros seleccionados.</td></tr></tbody>
+        </table></div>
+      </section>
+    </ng-container>
+  </section>
+
+  <div class="modal-backdrop warning-backdrop" *ngIf="showErrorModal" (click)="dismissErrorModal()">
+    <section class="detail-modal warning-modal" role="alertdialog" aria-modal="true" aria-labelledby="warning-title" (click)="$event.stopPropagation()">
+      <button class="modal-close" type="button" (click)="dismissErrorModal()" aria-label="Cerrar">×</button>
+      <span class="warning-icon" aria-hidden="true">!</span>
+      <p class="eyebrow">No se pudo completar la operación</p>
+      <h2 id="warning-title">{{ isAssetStockWarning ? 'Existencia insuficiente' : 'Atención' }}</h2>
+      <p class="warning-message">{{ errorMessage }}</p>
+      <p *ngIf="isAssetStockWarning" class="warning-guidance">Registra primero la compra o entrada del producto con la cantidad total de unidades. Después podrás asignar un QR a cada unidad.</p>
+      <div class="warning-actions">
+        <button *ngIf="isAssetStockWarning" class="secondary-btn" type="button" (click)="openProductsForStock()">Ir a productos</button>
+        <button class="primary-btn" type="button" (click)="dismissErrorModal()">Entendido</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" *ngIf="selectedProduct" (click)="selectedProduct = null">
+    <section class="detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-title" (click)="$event.stopPropagation()">
+      <button class="modal-close" type="button" (click)="selectedProduct = null" aria-label="Cerrar">×</button>
+      <p class="eyebrow">Detalle del producto</p><h2 id="detail-title">{{ selectedProduct.name }}</h2>
+      <dl class="detail-grid"><dt>Código</dt><dd>{{ selectedProduct.code }}</dd><dt>Categoría</dt><dd>{{ selectedProduct.category }}</dd><dt>Stock actual</dt><dd>{{ selectedProduct.stock }} {{ selectedProduct.unit }}</dd><dt>Stock mínimo</dt><dd>{{ selectedProduct.minimumStock }} {{ selectedProduct.unit }}</dd><dt>Ubicación</dt><dd>{{ selectedProduct.location }}</dd></dl>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" *ngIf="selectedAsset && selectedAssetQr" (click)="selectedAsset = null; selectedAssetQr = ''">
+    <section class="detail-modal qr-modal" role="dialog" aria-modal="true" aria-labelledby="asset-qr-title" (click)="$event.stopPropagation()">
+      <button class="modal-close" type="button" (click)="selectedAsset = null; selectedAssetQr = ''" aria-label="Cerrar">×</button>
+      <p class="eyebrow">Etiqueta local del activo</p><h2 id="asset-qr-title">{{ selectedAsset.assetCode }}</h2>
+      <img [src]="selectedAssetQr" [alt]="'Código QR de ' + selectedAsset.assetCode" />
+      <p>{{ selectedAsset.productName }} · {{ selectedAsset.areaName || 'Sin área' }}</p>
+      <button class="primary-btn print-qr-button" type="button" (click)="printQr()">Imprimir etiqueta</button>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" *ngIf="assetToAssign" (click)="assetToAssign = null">
+    <section class="detail-modal" role="dialog" aria-modal="true" aria-labelledby="assign-title" (click)="$event.stopPropagation()">
+      <button class="modal-close" type="button" (click)="assetToAssign = null" aria-label="Cerrar">×</button>
+      <p class="eyebrow">Cambio de custodia</p><h2 id="assign-title">{{ assetToAssign.assetCode }}</h2>
+      <form class="form-grid modal-form" (ngSubmit)="saveAssignment()">
+        <label><span>Área</span><select name="assignmentArea" [(ngModel)]="assignmentForm.areaId" required><option *ngFor="let area of areas" [ngValue]="area.id">{{ area.name }}</option></select></label>
+        <label><span>Responsable</span><select name="assignmentResponsible" [(ngModel)]="assignmentForm.responsibleId" required><option *ngFor="let user of users" [ngValue]="user.id">{{ user.fullName }}</option></select></label>
+        <label><span>Registrado por</span><input [value]="currentUser.fullName" readonly /></label>
+        <label><span>Condición</span><select name="assignmentCondition" [(ngModel)]="assignmentForm.condition"><option *ngFor="let condition of conditions" [ngValue]="condition">{{ conditionLabel(condition) }}</option></select></label>
+        <label class="span-two"><span>Motivo</span><input name="assignmentReason" [(ngModel)]="assignmentForm.reason" maxlength="200" required /></label>
+        <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving">Guardar asignación</button></div>
+      </form>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" *ngIf="selectedLoan && returnLine" (click)="selectedLoan = null; returnLine = null">
+    <section class="detail-modal return-modal" role="dialog" aria-modal="true" aria-labelledby="return-title" (click)="$event.stopPropagation()">
+      <button class="modal-close" type="button" (click)="selectedLoan = null; returnLine = null" aria-label="Cerrar">×</button>
+      <p class="eyebrow">Devolución · {{ selectedLoan.loanNumber }}</p><h2 id="return-title">{{ returnLine.productName }}</h2>
+      <form class="form-grid modal-form" (ngSubmit)="saveReturn()">
+        <label><span>Recibido por</span><input [value]="currentUser.fullName" readonly /></label>
+        <label><span>Devuelto por</span><input [value]="selectedLoan.borrowerName" readonly /></label>
+        <label><span>Área de retorno</span><select name="returnArea" [(ngModel)]="returnForm.areaId" required><option *ngFor="let area of areas" [ngValue]="area.id">{{ area.name }}</option></select></label>
+        <label><span>Condición al regresar</span><select name="returnCondition" [(ngModel)]="returnCondition" required><option *ngFor="let condition of conditions" [ngValue]="condition">{{ conditionLabel(condition) }}</option></select></label>
+        <div class="span-two" *ngIf="returnLine.assets.length"><span class="field-label">Activos que regresan</span><div class="selection-list">
+          <label *ngFor="let asset of selectedReturnAssets"><input type="checkbox" [checked]="returnAssetIds.has(asset.id)" (change)="toggleReturnAsset(asset.id, $event)" />{{ asset.assetCode }} · {{ conditionLabel(asset.condition) }}</label>
+        </div></div>
+        <label *ngIf="!returnLine.assets.length"><span>Cantidad devuelta (máximo {{ returnLine.outstandingQuantity }})</span><input name="returnQuantity" type="number" min="0.001" [max]="returnLine.outstandingQuantity" step="0.001" [(ngModel)]="returnQuantity" required /></label>
+        <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving">Registrar devolución</button></div>
+      </form>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" *ngIf="selectedQrDetail" (click)="closeAssetDetail()">
+    <section class="detail-modal qr-detail-modal" role="dialog" aria-modal="true" aria-labelledby="qr-detail-title" (click)="$event.stopPropagation()">
+      <button class="modal-close" type="button" (click)="closeAssetDetail()" aria-label="Cerrar">×</button>
+      <p class="eyebrow">Ficha QR · {{ selectedQrDetail.asset.assetCode }}</p><h2 id="qr-detail-title">{{ selectedQrDetail.asset.productName }}</h2>
+      <dl class="detail-grid"><dt>Serie</dt><dd>{{ selectedQrDetail.asset.serialNumber || '—' }}</dd><dt>Estado</dt><dd>{{ statusLabel(selectedQrDetail.asset.status) }}</dd><dt>Condición</dt><dd>{{ conditionLabel(selectedQrDetail.asset.condition) }}</dd><dt>Responsable</dt><dd>{{ selectedQrDetail.asset.responsibleName || 'Sin responsable' }}</dd><dt>Área</dt><dd>{{ selectedQrDetail.asset.areaName || 'Sin ubicación' }}</dd></dl>
+      <h3>Historial de custodia y condición</h3>
+      <div class="table-scroll"><table><thead><tr><th>Fecha</th><th>Movimiento</th><th>Responsable / recibe</th><th>Área</th><th>Condición</th><th>Motivo</th></tr></thead><tbody>
+        <tr *ngFor="let movement of selectedQrDetail.history"><td>{{ movement.movementDate | date:'dd/MM/yyyy' }}</td><td>{{ movement.purpose }}</td><td>{{ movement.userName }} / {{ movement.recipientName || '—' }}</td><td>{{ movement.areaName || '—' }}</td><td>{{ movement.conditionBefore || '—' }} → {{ movement.conditionAfter || '—' }}</td><td>{{ movement.reason || '—' }}</td></tr>
+        <tr *ngIf="!selectedQrDetail.history.length"><td colspan="6" class="empty-state">Sin movimientos asociados.</td></tr>
+      </tbody></table></div>
+    </section>
+  </div>
+</main>
+
+<ng-template #loginView>
+  <main class="login-shell">
+    <section class="login-card">
+      <img src="assets/logo-playa-la-honda.png" alt="Condominio Playa La Honda" />
+      <p class="eyebrow">Gestión segura de inventario</p>
+      <h1>Iniciar sesión</h1>
+      <p *ngIf="checkingSession" class="login-error" role="status">Comprobando si ya tienes una sesión activa…</p>
+      <form class="login-form" (ngSubmit)="login()">
+        <label><span>Correo electrónico</span><input name="loginEmail" type="email" [(ngModel)]="loginEmail" autocomplete="username" required /></label>
+        <label><span>Contraseña</span><input name="loginPassword" type="password" [(ngModel)]="loginPassword" autocomplete="current-password" required /></label>
+        <p *ngIf="loginError" class="login-error" role="alert">{{ loginError }}</p>
+        <button class="primary-btn" type="submit" [disabled]="saving">{{ saving ? 'Validando…' : 'Ingresar' }}</button>
+      </form>
+    </section>
+  </main>
+</ng-template>
