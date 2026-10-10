@@ -1,0 +1,9 @@
+project_id      = "REEMPLAZA_CON_EL_ID_DE_TU_PROYECTO"
+ssh_username    = "REEMPLAZA_CON_TU_USUARIO"
+ssh_public_key  = "ssh-ed25519 REEMPLAZA_CON_TU_CLAVE_PUBLICA"
+ssh_source_cidr = "203.0.113.10/32"
+
+# Para intentar reducir el costo, puedes cambiar e2-medium por e2-small.
+# e2-small tiene menos memoria; la compilación de las imágenes puede ser lenta
+# o fallar por falta de memoria.
+# machine_type = "e2-small"
