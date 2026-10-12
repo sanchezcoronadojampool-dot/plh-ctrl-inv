@@ -2,13 +2,20 @@
 
 Aplicación Angular + Spring Boot + PostgreSQL para controlar consumibles, combustible por unidad fraccionaria, activos con QR privado y préstamos con historial de devolución/condición. Cada condominio debe tener su propia instalación y base de datos.
 
-## Puesta en marcha local con Docker
+## Despliegue con Docker Compose
 
-1. Copia `.env.example` a `.env` y reemplaza los valores de ejemplo por contraseñas únicas. `BOOTSTRAP_ADMIN_PASSWORD` debe tener entre 12 y 72 caracteres.
-2. Ejecuta `docker compose up --build` y abre `http://localhost:8000`.
-3. Configura `COOKIE_SECURE=false` solo para pruebas locales por HTTP. En despliegues reales usa HTTPS y `COOKIE_SECURE=true`.
+La app se publica detrás del proxy compartido en `/proyecto1/`; no expone puertos de frontend, backend ni PostgreSQL al host. La ruta raíz queda reservada para la landing del cliente.
 
-No se incluyen credenciales predeterminadas. El administrador inicial se crea desde `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_NAME` y `BOOTSTRAP_ADMIN_PASSWORD`; esos valores no se vuelven a aplicar cuando ya hay un administrador activo. Cambia la contraseña bootstrap después de iniciar y elimina los secretos del entorno de despliegue según la política operativa.
+1. Copia `.env.example` a `.env` y reemplaza cada marcador por valores únicos. `BOOTSTRAP_ADMIN_PASSWORD` debe tener entre 12 y 72 caracteres.
+2. Crea una sola vez la red compartida del proxy: `docker network create web` (si ya existe, no hace falta recrearla).
+3. Desde esta carpeta, ejecuta `docker compose config --quiet` y luego `docker compose up -d --build`.
+4. Abre la app desde el proxy: `http://localhost/proyecto1/` en una prueba HTTP local, o la URL HTTPS del cliente.
+
+`COOKIE_SECURE=false` en la plantilla permite pruebas HTTP controladas; no publiques así una instalación comercial. Cuando el proxy tenga HTTPS, establece `COOKIE_SECURE=true` y conserva HTTPS en todo el acceso público.
+
+**Rotación de secretos antes del piloto:** el archivo `.env` local se conservó y dejó de seguirse en Git, pero su versión anterior puede permanecer en commits previos. Rota la contraseña de PostgreSQL y la del administrador inicial; retirar el archivo del seguimiento no revoca ni borra valores históricos.
+
+No se incluyen credenciales predeterminadas. El administrador inicial se crea desde `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_NAME` y `BOOTSTRAP_ADMIN_PASSWORD`; esos valores no se vuelven a aplicar cuando ya hay un administrador activo. Cambia la contraseña bootstrap después de iniciar y elimina los secretos del entorno de despliegue según la política operativa. Nunca compartas la salida de `docker compose config`: puede mostrar los valores resueltos.
 
 ## Migraciones y datos existentes
 

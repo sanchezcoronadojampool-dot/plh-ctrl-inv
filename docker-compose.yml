@@ -12,6 +12,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+    networks:
+      - internal
     restart: unless-stopped
 
   backend:
@@ -30,17 +32,27 @@ services:
     depends_on:
       database:
         condition: service_healthy
+    networks:
+      - internal
     restart: unless-stopped
 
   frontend:
     build:
       context: frontend
       dockerfile: Dockerfile
-    ports:
-      - "8000:80"
+    container_name: plh-inv-frontend
     depends_on:
       - backend
+    networks:
+      - internal
+      - web
     restart: unless-stopped
 
 volumes:
   postgres_data:
+
+networks:
+  internal:
+  web:
+    external: true
+    name: web

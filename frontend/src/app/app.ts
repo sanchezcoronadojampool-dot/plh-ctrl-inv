@@ -18,6 +18,7 @@ const CONDITIONS: ItemCondition[] = ['NEW', 'GOOD', 'FAIR', 'DAMAGED', 'OUT_OF_S
 })
 export class App implements OnInit {
   readonly Math = Math;
+  private readonly basePath = new URL('.', document.baseURI).pathname;
   private loginAttempted = false;
   activeSection: Section = 'dashboard';
   products: Product[] = [];
@@ -556,7 +557,7 @@ export class App implements OnInit {
 
   async showAssetQr(asset: Asset): Promise<void> {
     this.selectedAsset = asset;
-    const url = `${window.location.origin}/qr/${asset.qrToken}`;
+    const url = `${window.location.origin}${this.basePath}qr/${asset.qrToken}`;
     try {
       this.selectedAssetQr = await QRCode.toDataURL(url, { width: 240, margin: 1, errorCorrectionLevel: 'M' });
       this.changeDetector.markForCheck();
@@ -581,13 +582,13 @@ export class App implements OnInit {
   }
 
   openAssetDetail(asset: Asset): void {
-    window.history.pushState({}, '', `/qr/${asset.qrToken}`);
+    window.history.pushState({}, '', `${this.basePath}qr/${asset.qrToken}`);
     this.loadQrDetail(asset.qrToken);
   }
 
   closeAssetDetail(): void {
     this.selectedQrDetail = null;
-    if (window.location.pathname.startsWith('/qr/')) window.history.pushState({}, '', '/');
+    if (this.relativePath.startsWith('/qr/')) window.history.pushState({}, '', this.basePath);
   }
 
   printQr(): void {
@@ -609,13 +610,19 @@ export class App implements OnInit {
   }
 
   private syncQrRoute(): void {
-    const match = window.location.pathname.match(/^\/qr\/([0-9a-f-]+)$/i);
+    const match = this.relativePath.match(/^\/qr\/([0-9a-f-]+)$/i);
     if (match) {
       this.activeSection = 'assets';
       this.loadQrDetail(match[1]);
     } else {
       this.selectedQrDetail = null;
     }
+  }
+
+  private get relativePath(): string {
+    return window.location.pathname.startsWith(this.basePath)
+      ? `/${window.location.pathname.slice(this.basePath.length)}`
+      : window.location.pathname;
   }
 
   private loadQrDetail(token: string): void {

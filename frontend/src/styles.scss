@@ -8,7 +8,7 @@ app-root {
   display: block;
   min-height: 100vh;
   color: #1d2939;
-  font-family: Inter, "Segoe UI", Arial, sans-serif;
+  font-family: Inter, "Segoe UI", "Helvetica Neue", sans-serif;
 }
 
 * {
@@ -36,7 +36,7 @@ svg {
   display: grid;
   grid-template-columns: 244px minmax(0, 1fr);
   min-height: 100vh;
-  background: #f3f7fc;
+  background: #f9fafb;
 }
 
 .sidebar {
@@ -111,7 +111,7 @@ svg {
   border-color: #ffffff12;
 }
 .nav-btn.active svg {
-  color: #00b4c7;
+  color: #007f8d;
 }
 .sidebar-foot {
   display: flex;
@@ -198,7 +198,7 @@ svg {
   place-items: center;
   padding: 24px;
   background:
-    radial-gradient(circle at top left, #e7f4fb, transparent 45%), #f3f7fc;
+    radial-gradient(circle at top left, #e7f4fb, transparent 45%), #f9fafb;
 }
 .login-card {
   width: min(100%, 410px);
@@ -668,7 +668,7 @@ input[type="checkbox"] {
 }
 .primary-btn {
   color: #fff;
-  background: linear-gradient(135deg, #008ca2, #003b73);
+  background: linear-gradient(135deg, #007f8d, #003b73);
   box-shadow: 0 4px 10px #2864c520;
 }
 .primary-btn:hover {

@@ -5,7 +5,7 @@ import { Area, Asset, DashboardSummary, InventoryPerson, Loan, Movement, Product
 
 @Injectable({ providedIn: 'root' })
 export class InventoryService {
-  private readonly apiUrl = '/api';
+  private readonly apiUrl = new URL('api', document.baseURI).pathname.replace(/\/$/, '');
 
   constructor(private http: HttpClient) {}
 
