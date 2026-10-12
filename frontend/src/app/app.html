@@ -114,6 +114,7 @@
                 <td>{{ product.location }}</td>
                 <td><span class="status" [class.incoming]="product.stock > product.minimumStock" [class.warning-status]="product.stock > 0 && product.stock <= product.minimumStock" [class.neutral-status]="product.stock === 0">{{ product.stock === 0 ? 'Agotado' : product.stock <= product.minimumStock ? 'Stock bajo' : 'Disponible' }}</span></td>
                 <td><div class="row-actions">
+                  <button *ngIf="product.trackingType !== 'ASSET' && product.trackingType !== 'REUSABLE' && product.stock > 0" type="button" class="quick-delivery-btn" (click)="startQuickDelivery(product)">Entregar</button>
                   <button type="button" class="action-btn detail-btn" (click)="showProductDetails(product)" title="Detalle" aria-label="Detalle">⌕</button>
                   <button *ngIf="isAdministrator" type="button" class="action-btn edit-btn" (click)="editProduct(product)" title="Editar" aria-label="Editar">✎</button>
                   <button *ngIf="isAdministrator" type="button" class="action-btn delete-btn" (click)="deleteProduct(product)" title="Eliminar" aria-label="Eliminar">×</button>
@@ -138,7 +139,8 @@
           <label><span>Nombre</span><input name="productName" [(ngModel)]="productForm.name" required maxlength="120" /></label>
           <label><span>Categoría</span><input name="productCategory" [(ngModel)]="productForm.category" required maxlength="80" /></label>
           <label><span>Tipo de seguimiento</span><select name="productTrackingType" [(ngModel)]="productForm.trackingType" required><option value="CONSUMABLE">Consumible</option><option value="REUSABLE">Reutilizable / préstamo</option><option value="ASSET">Activo individual con QR</option><option value="FUEL">Combustible (galones)</option></select></label>
-          <label><span>Stock actual</span><input name="productStock" type="number" min="0" step="0.001" [(ngModel)]="productForm.stock" readonly required /><small>Registra compras y salidas desde Movimientos; así queda un saldo auditable.</small></label>
+          <label *ngIf="!editingProductId"><span>Existencia inicial</span><input name="productStock" type="number" min="0" [step]="productForm.trackingType === 'ASSET' ? '1' : '0.001'" [(ngModel)]="productForm.stock" required /><small>Si ya tienes unidades, se registrarán como entrada inicial y quedarán en el historial.</small></label>
+          <label *ngIf="editingProductId"><span>Stock actual</span><input name="productStock" type="number" min="0" step="0.001" [(ngModel)]="productForm.stock" readonly required /><small>El stock solo cambia al registrar entradas, salidas, préstamos o devoluciones.</small></label>
           <label><span>Stock mínimo</span><input name="productMinimum" type="number" min="0" [(ngModel)]="productForm.minimumStock" required /></label>
           <label><span>Unidad</span><input name="productUnit" [(ngModel)]="productForm.unit" required maxlength="40" placeholder="pza, caja…" /></label>
           <label><span>Ubicación</span><input name="productLocation" [(ngModel)]="productForm.location" required maxlength="80" /></label>
@@ -150,23 +152,23 @@
 
     <ng-container *ngIf="activeSection === 'movements'">
       <section class="panel">
-        <div class="section-heading"><div><h2>Movimientos de almacén</h2><p>Entradas, entregas, consumos y combustible con cantidades fraccionarias</p></div><button class="primary-btn" type="button" (click)="showMovementForm = true">+ Registrar movimiento</button></div>
+        <div class="section-heading"><div><h2>Movimientos de almacén</h2><p>Registra entregas rápidas o entradas de productos</p></div><div class="movement-actions"><button class="primary-btn" type="button" (click)="startQuickDelivery()">Entrega rápida</button><button class="secondary-btn" type="button" (click)="startMovement()">+ Registrar entrada</button></div></div>
       </section>
-      <div class="modal-backdrop" *ngIf="showMovementForm" (click)="showMovementForm = false">
+      <div class="modal-backdrop" *ngIf="showMovementForm" (click)="closeMovementForm()">
         <section class="detail-modal form-dialog" role="dialog" aria-modal="true" aria-labelledby="movement-form-title" (click)="$event.stopPropagation()">
-        <button class="modal-close" type="button" (click)="showMovementForm = false" aria-label="Cerrar">×</button>
-        <div class="section-heading"><div><h2 id="movement-form-title">Registrar movimiento</h2><p>El stock se actualizará automáticamente al guardar</p></div></div>
-        <form class="form-grid movement-form" (ngSubmit)="saveMovement()">
+        <button class="modal-close" type="button" (click)="closeMovementForm()" aria-label="Cerrar">×</button>
+        <div class="section-heading"><div><h2 id="movement-form-title">{{ quickMovementMode ? 'Entrega rápida' : movementForm.type === 'ENTRADA' ? 'Registrar entrada' : 'Registrar salida' }}</h2><p>{{ quickMovementMode ? 'Selecciona a quién y cuánto entregar; el stock se descuenta al guardar.' : 'El stock se actualizará automáticamente al guardar.' }}</p></div></div>
+        <form class="form-grid movement-form" [class.quick-movement-form]="quickMovementMode" (ngSubmit)="saveMovement()">
           <label><span>Producto</span><select name="movementProduct" [(ngModel)]="movementForm.productId" required><option [ngValue]="0" disabled>Selecciona un producto</option><option *ngFor="let product of movementProducts" [ngValue]="product.id">{{ product.code }} · {{ product.name }} ({{ product.stock }} {{ product.unit }})</option></select></label>
-          <label><span>Tipo de movimiento</span><select name="movementType" [(ngModel)]="movementForm.type" (ngModelChange)="movementTypeChanged()" required><option value="ENTRADA">Entrada / compra</option><option value="SALIDA">Salida / entrega</option></select></label>
-          <label><span>Cantidad ({{ selectedMovementProduct?.unit || 'unidades' }})</span><input name="movementQuantity" type="number" min="0.001" [step]="selectedMovementProduct?.trackingType === 'ASSET' ? '1' : '0.001'" [(ngModel)]="movementForm.quantity" required /></label>
-          <label><span>Registrado por</span><input [value]="currentUser.fullName" readonly /></label>
-          <label><span>Entregado a</span><select name="movementRecipient" [(ngModel)]="movementForm.recipientId" [required]="movementForm.type === 'SALIDA'"><option [ngValue]="undefined">— Selecciona destinatario —</option><option *ngFor="let user of users" [ngValue]="user.id">{{ user.fullName }} · {{ user.jobTitle }}</option></select></label>
-          <label><span>Área destino</span><select name="movementArea" [(ngModel)]="movementForm.areaId"><option [ngValue]="undefined">— No especificada —</option><option *ngFor="let area of areas" [ngValue]="area.id">{{ area.name }}</option></select></label>
-          <label><span>Fecha</span><input name="movementDate" type="date" [(ngModel)]="movementForm.movementDate" required /></label>
+          <label *ngIf="!quickMovementMode"><span>Tipo de movimiento</span><select name="movementType" [(ngModel)]="movementForm.type" (ngModelChange)="movementTypeChanged()" required><option value="ENTRADA">Entrada / compra</option><option value="SALIDA">Salida / entrega</option></select></label>
+          <label><span>Cantidad ({{ selectedMovementProduct?.unit || 'unidades' }})</span><input name="movementQuantity" type="number" min="0.001" [max]="movementForm.type === 'SALIDA' ? selectedMovementProduct?.stock ?? null : null" [step]="selectedMovementProduct?.trackingType === 'ASSET' ? '1' : '0.001'" [(ngModel)]="movementForm.quantity" required /></label>
+          <label *ngIf="!quickMovementMode"><span>Registrado por</span><input [value]="currentUser.fullName" readonly /></label>
+          <label><span>Entregar a</span><select name="movementRecipient" [(ngModel)]="movementForm.recipientId" [required]="movementForm.type === 'SALIDA'"><option [ngValue]="undefined">Selecciona trabajador</option><option *ngFor="let user of users" [ngValue]="user.id">{{ user.fullName }} · {{ user.jobTitle }}</option></select></label>
+          <label *ngIf="!quickMovementMode"><span>Área destino</span><select name="movementArea" [(ngModel)]="movementForm.areaId"><option [ngValue]="undefined">— No especificada —</option><option *ngFor="let area of areas" [ngValue]="area.id">{{ area.name }}</option></select></label>
+          <label *ngIf="!quickMovementMode"><span>Fecha</span><input name="movementDate" type="date" [(ngModel)]="movementForm.movementDate" required /></label>
           <label *ngIf="selectedMovementProduct?.trackingType === 'FUEL' && movementForm.type === 'SALIDA'"><span>Vehículo o equipo abastecido</span><input name="fuelEquipment" [(ngModel)]="movementForm.vehicleEquipment" required maxlength="120" placeholder="Vehículo, generador, equipo…" /></label>
-          <label class="span-two"><span>Motivo / uso</span><input name="movementReason" [(ngModel)]="movementForm.reason" [required]="selectedMovementProduct?.trackingType === 'FUEL' && movementForm.type === 'SALIDA'" maxlength="200" placeholder="Compra, limpieza de baño, combustible para…" /></label>
-          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving || !products.length || !users.length">{{ saving ? 'Guardando…' : 'Registrar movimiento' }}</button></div>
+          <label *ngIf="!quickMovementMode || selectedMovementProduct?.trackingType === 'FUEL'" class="span-two"><span>Motivo / uso</span><input name="movementReason" [(ngModel)]="movementForm.reason" [required]="selectedMovementProduct?.trackingType === 'FUEL' && movementForm.type === 'SALIDA'" maxlength="200" [placeholder]="movementForm.type === 'ENTRADA' ? 'Compra o reposición…' : 'Motivo de entrega…'" /></label>
+          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving || !products.length || !users.length || (movementForm.type === 'SALIDA' && !movementForm.recipientId)">{{ saving ? 'Guardando…' : quickMovementMode ? 'Confirmar entrega' : movementForm.type === 'ENTRADA' ? 'Registrar entrada' : 'Registrar salida' }}</button></div>
         </form>
         </section>
       </div>

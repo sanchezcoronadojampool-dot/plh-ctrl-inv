@@ -82,6 +82,16 @@ public class InventoryService {
         return userRepository.findById(fallbackUserId)
                 .orElseThrow(() -> new EntityNotFoundException("User not found: " + fallbackUserId));
     }
+
+    private User currentActor() {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null && authentication.getPrincipal() instanceof AuthenticatedUser principal) {
+            return userRepository.findById(principal.id())
+                    .orElseThrow(() -> new EntityNotFoundException("La cuenta autenticada ya no existe."));
+        }
+        throw new IllegalStateException("Se requiere una cuenta autenticada para registrar la existencia inicial.");
+    }
+
     @Transactional(readOnly = true)
     public List<ProductResponse> getProducts() {
         return productRepository.findAll().stream()
@@ -105,9 +115,6 @@ public class InventoryService {
     public ProductResponse createProduct(ProductRequest request) {
         TrackingType trackingType = request.trackingType() != null ? request.trackingType() : TrackingType.CONSUMABLE;
         BigDecimal stock = request.stock();
-        if (stock.signum() != 0) {
-            throw new IllegalArgumentException("Registra la existencia inicial mediante un movimiento de entrada para mantener el historial conciliable.");
-        }
         if (trackingType == TrackingType.ASSET && stock.stripTrailingZeros().scale() > 0) {
             throw new IllegalArgumentException("La existencia de activos unitarios debe ser un número entero.");
         }
@@ -124,7 +131,20 @@ public class InventoryService {
                 .active(true)
                 .build();
 
-        return toProductResponse(productRepository.save(product));
+        product = productRepository.save(product);
+        if (stock.signum() > 0) {
+            Movement openingMovement = Movement.builder()
+                    .product(product)
+                    .user(currentActor())
+                    .type(MovementType.ENTRADA)
+                    .quantity(stock)
+                    .purpose(MovementPurpose.PURCHASE)
+                    .reason("Existencia inicial al registrar el producto")
+                    .movementDate(LocalDate.now())
+                    .build();
+            recordStockLedger(movementRepository.save(openingMovement));
+        }
+        return toProductResponse(product);
     }
 
     @Transactional

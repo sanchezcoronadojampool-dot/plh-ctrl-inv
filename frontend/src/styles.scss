@@ -563,6 +563,19 @@ input[type="checkbox"] {
   display: flex;
   gap: 5px;
 }
+.quick-delivery-btn {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid #cce8e7;
+  border-radius: 7px;
+  color: #087b78;
+  background: #f1fbfa;
+  font-size: 10px;
+  font-weight: 700;
+}
+.quick-delivery-btn:hover {
+  background: #e3f6f4;
+}
 .action-btn {
   display: grid;
   width: 26px;
@@ -693,6 +706,17 @@ input[type="checkbox"] {
 }
 .movement-form {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.quick-movement-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.quick-movement-form .form-submit {
+  grid-column: 1 / -1;
+}
+.movement-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .movement-form .span-two {
   grid-column: span 2;

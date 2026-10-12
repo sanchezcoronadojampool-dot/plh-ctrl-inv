@@ -16,6 +16,7 @@ describe('App', () => {
     getAreas: () => of([{ id: 1, name: 'Almacén' }]),
     getAssets: () => of([]),
     getLoans: () => of([]),
+    createProduct: vi.fn(() => of({})),
     createMovement: vi.fn(() => of({})),
     createAsset: vi.fn(() => throwError(() => ({
       error: { message: 'Registra primero la existencia de compra del producto; no puedes etiquetar más unidades que las existentes.' }
@@ -115,6 +116,46 @@ describe('App', () => {
     }));
   });
 
+  it('starts a quick delivery with the product selected and keeps the recipient required', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const app = fixture.componentInstance;
+    const product = { id: 9, code: 'P-009', name: 'Guantes', category: 'Seguridad',
+      stock: 12, minimumStock: 2, location: 'Almacén', unit: 'par', trackingType: 'CONSUMABLE' as const };
+    app.products = [product];
+    app.users = [{ id: 5, fullName: 'Trabajador', jobTitle: 'Mantenimiento' }];
+    app.currentUser = { id: 1, fullName: 'Administradora', jobTitle: 'Administradora',
+      role: 'ADMIN', email: 'admin@example.com' };
+
+    app.startQuickDelivery(product);
+
+    expect(app.quickMovementMode).toBe(true);
+    expect(app.movementForm.type).toBe('SALIDA');
+    expect(app.movementForm.productId).toBe(product.id);
+    expect(app.movementForm.recipientId).toBeUndefined();
+    app.movementForm.recipientId = 5;
+    app.saveMovement();
+
+    expect(inventoryService.createMovement).toHaveBeenCalledWith(expect.objectContaining({
+      productId: product.id, type: 'SALIDA', recipientId: 5, purpose: 'CONSUMPTION'
+    }));
+    expect(app.movementForm.recipientId).toBe(5);
+  });
+
+  it('does not submit a quick delivery without a selected recipient', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const app = fixture.componentInstance;
+    app.products = [{ id: 9, code: 'P-009', name: 'Guantes', category: 'Seguridad',
+      stock: 12, minimumStock: 2, location: 'Almacén', unit: 'par', trackingType: 'CONSUMABLE' }];
+    app.movementForm.userId = 1;
+    app.startQuickDelivery(app.products[0]);
+
+    app.saveMovement();
+
+    expect(inventoryService.createMovement).not.toHaveBeenCalled();
+  });
+
   it('opens product registration in a dialog instead of inline on the page', () => {
     const fixture = TestBed.createComponent(App);
     fixture.detectChanges();
@@ -124,6 +165,21 @@ describe('App', () => {
     fixture.detectChanges();
 
     expect(fixture.componentInstance.showProductForm).toBe(true);
+  });
+
+  it('saves the initial product stock during product registration', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const app = fixture.componentInstance;
+    app.startNewProduct();
+    app.productForm = {
+      code: 'P-INITIAL', name: 'Producto inicial', category: 'Herramientas', stock: 12.5,
+      minimumStock: 2, location: 'Almacén', unit: 'pza', trackingType: 'CONSUMABLE'
+    };
+
+    app.saveProduct();
+
+    expect(inventoryService.createProduct).toHaveBeenCalledWith(expect.objectContaining({ stock: 12.5 }));
   });
 
   it('shows the insufficient asset stock response in an actionable warning dialog', () => {

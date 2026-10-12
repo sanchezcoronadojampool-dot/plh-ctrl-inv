@@ -68,6 +68,7 @@ export class App implements OnInit {
   returnCondition: ItemCondition = 'GOOD';
   showProductForm = false;
   showMovementForm = false;
+  quickMovementMode = false;
   showUserForm = false;
   showAreaForm = false;
   showAssetForm = false;
@@ -326,7 +327,6 @@ export class App implements OnInit {
           this.loanForm.issuedById = this.currentUser.id;
           this.returnForm.receivedById = this.currentUser.id;
         }
-        if (!this.movementForm.recipientId && people.length) this.movementForm.recipientId = people[0].id;
         if (!this.loanForm.borrowerId && people.length) this.loanForm.borrowerId = people[0].id;
         if (!this.assetForm.responsibleId && people.length) this.assetForm.responsibleId = people[0].id;
         if (!this.assetForm.areaId && areas.length) this.assetForm.areaId = areas[0].id;
@@ -379,6 +379,37 @@ export class App implements OnInit {
     this.editingProductId = null;
     this.productForm = this.emptyProduct();
     this.showProductForm = true;
+  }
+
+  startQuickDelivery(product?: Product): void {
+    const deliverableProducts = this.products.filter((item) =>
+      item.trackingType !== 'ASSET' && item.trackingType !== 'REUSABLE'
+    );
+    this.quickMovementMode = true;
+    this.movementForm = {
+      ...this.movementForm,
+      productId: product && deliverableProducts.some((item) => item.id === product.id) ? product.id! : 0,
+      userId: this.currentUser?.id ?? 0,
+      type: 'SALIDA',
+      quantity: 1,
+      reason: '',
+      purpose: undefined,
+      vehicleEquipment: '',
+      movementDate: this.today()
+    };
+    this.showMovementForm = true;
+  }
+
+  startMovement(): void {
+    this.quickMovementMode = false;
+    this.movementForm.type = 'ENTRADA';
+    this.movementTypeChanged();
+    this.showMovementForm = true;
+  }
+
+  closeMovementForm(): void {
+    this.showMovementForm = false;
+    this.quickMovementMode = false;
   }
 
   editProduct(product: Product): void {
@@ -445,20 +476,23 @@ export class App implements OnInit {
   }
 
   saveMovement(): void {
-    if (!this.movementForm.productId || !this.movementForm.userId || !this.movementForm.quantity || this.movementForm.quantity <= 0) return;
+    if (!this.movementForm.productId || !this.movementForm.userId || !this.movementForm.quantity
+        || this.movementForm.quantity <= 0
+        || (this.movementForm.type === 'SALIDA' && !this.movementForm.recipientId)) return;
     const product = this.products.find((item) => item.id === Number(this.movementForm.productId));
     const purpose = this.movementForm.type === 'ENTRADA' ? 'PURCHASE'
       : product?.trackingType === 'FUEL' ? 'FUEL_USE' : 'CONSUMPTION';
     this.runMutation(this.inventoryService.createMovement({ ...this.movementForm, purpose }), 'Movimiento registrado.', () => {
       this.showMovementForm = false;
+      this.quickMovementMode = false;
       this.movementForm = {
-        productId: this.movementProducts[0]?.id ?? 0,
+        productId: 0,
         userId: this.currentUser?.id ?? 0,
         type: 'ENTRADA',
         quantity: 1,
         reason: '',
-        recipientId: this.users[0]?.id,
-        areaId: this.areas[0]?.id,
+        recipientId: this.movementForm.recipientId,
+        areaId: this.movementForm.areaId,
         vehicleEquipment: '',
         movementDate: this.today()
       };

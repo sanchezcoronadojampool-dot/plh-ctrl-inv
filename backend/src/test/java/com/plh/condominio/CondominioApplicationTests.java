@@ -12,6 +12,7 @@ import com.plh.condominio.dto.LoanReturnRequest;
 import com.plh.condominio.dto.LoanResponse;
 import com.plh.condominio.dto.MovementRequest;
 import com.plh.condominio.dto.ProductRequest;
+import com.plh.condominio.dto.ProductResponse;
 import com.plh.condominio.entity.AssetStatus;
 import com.plh.condominio.entity.InventoryAsset;
 import com.plh.condominio.entity.ItemCondition;
@@ -21,6 +22,7 @@ import com.plh.condominio.entity.Product;
 import com.plh.condominio.entity.StorageArea;
 import com.plh.condominio.entity.User;
 import com.plh.condominio.entity.TrackingType;
+import com.plh.condominio.security.AuthenticatedUser;
 import com.plh.condominio.repository.AreaRepository;
 import com.plh.condominio.repository.AssetRepository;
 import com.plh.condominio.repository.LoanRepository;
@@ -36,6 +38,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 @SpringBootTest
 @ActiveProfiles({"h2", "demo"})
@@ -84,6 +88,30 @@ class CondominioApplicationTests {
 
 		assertThrows(IllegalArgumentException.class,
 				() -> inventoryService.updateProduct(product.getId(), changeTracking));
+	}
+
+	@Test
+	@Transactional
+	void createsProductWithInitialStockAndAuditableEntryInOneOperation() {
+		User operator = findUser("Encargado");
+		AuthenticatedUser principal = AuthenticatedUser.from(operator);
+		SecurityContextHolder.getContext().setAuthentication(
+				new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities()));
+		try {
+			ProductResponse created = inventoryService.createProduct(new ProductRequest(
+					"P-INITIAL-TEST", "Producto inicial de prueba", "Pruebas", new BigDecimal("12.500"),
+					BigDecimal.ONE, "Almacén", "pza", TrackingType.CONSUMABLE));
+
+			assertEquals(0, new BigDecimal("12.500").compareTo(created.stock()));
+			var movement = inventoryService.getMovements().stream()
+					.filter(candidate -> candidate.productId().equals(created.id())).findFirst().orElseThrow();
+			assertEquals(MovementType.ENTRADA, movement.type());
+			assertEquals(0, new BigDecimal("12.500").compareTo(movement.quantity()));
+			assertEquals(operator.getFullName(), movement.userName());
+			assertEquals(List.of(), inventoryService.reconcileStockLedger());
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
 	}
 
 	@Test
