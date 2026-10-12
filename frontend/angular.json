@@ -36,7 +36,7 @@
           },
           "configurations": {
             "production": {
-              "baseHref": "/proyecto1/",
+              "baseHref": "/",
               "optimization": {
                  "styles": {
                   "inlineCritical": false

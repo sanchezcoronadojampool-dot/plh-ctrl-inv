@@ -4,14 +4,14 @@ Aplicación Angular + Spring Boot + PostgreSQL para controlar consumibles, combu
 
 ## Despliegue con Docker Compose
 
-La app se publica detrás del proxy compartido en `/proyecto1/`; no expone puertos de frontend, backend ni PostgreSQL al host. La ruta raíz queda reservada para la landing del cliente.
+La app se publica detrás del proxy compartido en su propio hostname; no expone puertos de frontend, backend ni PostgreSQL al host.
 
 1. Copia `.env.example` a `.env` y reemplaza cada marcador por valores únicos. `BOOTSTRAP_ADMIN_PASSWORD` debe tener entre 12 y 72 caracteres.
 2. Crea una sola vez la red compartida del proxy: `docker network create web` (si ya existe, no hace falta recrearla).
 3. Desde esta carpeta, ejecuta `docker compose config --quiet` y luego `docker compose up -d --build`.
-4. Abre la app desde el proxy: `http://localhost/proyecto1/` en una prueba HTTP local, o la URL HTTPS del cliente.
+4. Abre la app por HTTPS desde `https://inventario-plh-condominio.duckdns.org`. Consulta la configuración de DuckDNS y de los hostnames en el README del proxy compartido.
 
-`COOKIE_SECURE=false` en la plantilla permite pruebas HTTP controladas; no publiques así una instalación comercial. Cuando el proxy tenga HTTPS, establece `COOKIE_SECURE=true` y conserva HTTPS en todo el acceso público.
+`COOKIE_SECURE=true` es el valor seguro para el despliegue HTTPS. Solo establécelo en `false` para pruebas locales controladas por HTTP; no publiques así una instalación comercial.
 
 **Rotación de secretos antes del piloto:** el archivo `.env` local se conservó y dejó de seguirse en Git, pero su versión anterior puede permanecer en commits previos. Rota la contraseña de PostgreSQL y la del administrador inicial; retirar el archivo del seguimiento no revoca ni borra valores históricos.
 
