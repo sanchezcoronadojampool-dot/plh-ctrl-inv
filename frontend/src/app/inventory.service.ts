@@ -54,6 +54,10 @@ export class InventoryService {
     return this.http.get<InventoryPerson[]>(`${this.apiUrl}/people`);
   }
 
+  createPerson(person: Pick<InventoryPerson, 'fullName' | 'jobTitle'>): Observable<InventoryPerson> {
+    return this.http.post<InventoryPerson>(`${this.apiUrl}/people`, person);
+  }
+
   createUser(user: Partial<User>): Observable<User> {
     return this.http.post<User>(`${this.apiUrl}/users`, user);
   }

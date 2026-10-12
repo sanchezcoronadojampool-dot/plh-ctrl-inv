@@ -8,6 +8,7 @@ import com.plh.condominio.dto.ProductResponse;
 import com.plh.condominio.dto.UserRequest;
 import com.plh.condominio.dto.UserResponse;
 import com.plh.condominio.dto.InventoryPersonResponse;
+import com.plh.condominio.dto.InventoryPersonRequest;
 import com.plh.condominio.dto.StockLedgerEntryResponse;
 import com.plh.condominio.dto.StockReconciliationResponse;
 import com.plh.condominio.entity.Movement;
@@ -19,6 +20,7 @@ import com.plh.condominio.entity.StorageArea;
 import com.plh.condominio.entity.AssetStatus;
 import com.plh.condominio.entity.Product;
 import com.plh.condominio.entity.User;
+import com.plh.condominio.entity.InventoryPerson;
 import com.plh.condominio.entity.InventoryStockLedgerEntry;
 import com.plh.condominio.security.AuthenticatedUser;
 import com.plh.condominio.repository.MovementRepository;
@@ -26,11 +28,13 @@ import com.plh.condominio.repository.InventoryStockLedgerRepository;
 import com.plh.condominio.repository.LoanLineRepository;
 import com.plh.condominio.repository.ProductRepository;
 import com.plh.condominio.repository.UserRepository;
+import com.plh.condominio.repository.InventoryPersonRepository;
 import com.plh.condominio.repository.AreaRepository;
 import com.plh.condominio.repository.AssetRepository;
 import jakarta.persistence.EntityNotFoundException;
 import java.time.LocalDate;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -52,10 +56,12 @@ public class InventoryService {
     private final PasswordEncoder passwordEncoder;
     private final InventoryStockLedgerRepository stockLedgerRepository;
     private final LoanLineRepository loanLineRepository;
+    private final InventoryPersonRepository inventoryPersonRepository;
 
     public InventoryService(ProductRepository productRepository, UserRepository userRepository, MovementRepository movementRepository,
             AreaRepository areaRepository, AssetRepository assetRepository, PasswordEncoder passwordEncoder,
-            InventoryStockLedgerRepository stockLedgerRepository, LoanLineRepository loanLineRepository) {
+            InventoryStockLedgerRepository stockLedgerRepository, LoanLineRepository loanLineRepository,
+            InventoryPersonRepository inventoryPersonRepository) {
         this.productRepository = productRepository;
         this.userRepository = userRepository;
         this.movementRepository = movementRepository;
@@ -64,6 +70,7 @@ public class InventoryService {
         this.passwordEncoder = passwordEncoder;
         this.stockLedgerRepository = stockLedgerRepository;
         this.loanLineRepository = loanLineRepository;
+        this.inventoryPersonRepository = inventoryPersonRepository;
     }
 
     private static void validatePassword(String password) {
@@ -120,9 +127,10 @@ public class InventoryService {
         }
         validateTrackingUnit(trackingType, request.unit());
         Product product = Product.builder()
-                .code(request.code())
+                .code(resolveProductCode(request.code().trim()))
                 .name(request.name())
                 .category(request.category())
+                .variant(request.variant() != null ? request.variant().trim() : "")
                 .stock(stock)
                 .minimumStock(request.minimumStock())
                 .location(request.location())
@@ -155,6 +163,7 @@ public class InventoryService {
         product.setCode(request.code());
         product.setName(request.name());
         product.setCategory(request.category());
+        product.setVariant(request.variant() != null ? request.variant().trim() : "");
         if (request.stock().compareTo(product.getStock()) != 0) {
             throw new IllegalArgumentException("El stock solo cambia mediante compras, consumos, préstamos, devoluciones o ajustes.");
         }
@@ -194,9 +203,23 @@ public class InventoryService {
 
     @Transactional(readOnly = true)
     public List<InventoryPersonResponse> getPeople() {
-        return userRepository.findAllByEnabledTrueOrderByFullNameAsc().stream()
-                .map(user -> new InventoryPersonResponse(user.getId(), user.getFullName(), user.getJobTitle()))
+        return inventoryPersonRepository.findAllByActiveTrueOrderByFullNameAsc().stream()
+                .map(person -> new InventoryPersonResponse(person.getId(), person.getFullName(), person.getJobTitle()))
                 .toList();
+    }
+
+    @Transactional
+    public InventoryPersonResponse createPerson(InventoryPersonRequest request) {
+        String fullName = request.fullName().trim();
+        String jobTitle = request.jobTitle().trim();
+        if (inventoryPersonRepository.existsByFullNameIgnoreCaseAndJobTitleIgnoreCaseAndActiveTrue(fullName, jobTitle)) {
+            throw new IllegalArgumentException("Ese trabajador ya está registrado.");
+        }
+        InventoryPerson person = new InventoryPerson();
+        person.setFullName(fullName);
+        person.setJobTitle(jobTitle);
+        person = inventoryPersonRepository.save(person);
+        return new InventoryPersonResponse(person.getId(), person.getFullName(), person.getJobTitle());
     }
 
     @Transactional
@@ -217,7 +240,9 @@ public class InventoryService {
                 .passwordHash(passwordEncoder.encode(request.password()))
                 .build();
 
-        return toUserResponse(userRepository.save(user));
+        user = userRepository.save(user);
+        ensureInventoryPerson(user);
+        return toUserResponse(user);
     }
 
     @Transactional
@@ -241,7 +266,21 @@ public class InventoryService {
             validatePassword(request.password());
             user.setPasswordHash(passwordEncoder.encode(request.password()));
         }
-        return toUserResponse(userRepository.save(user));
+        user = userRepository.save(user);
+        ensureInventoryPerson(user);
+        return toUserResponse(user);
+    }
+
+    private void ensureInventoryPerson(User user) {
+        if (user.getRole() == AccessRole.VIEWER) return;
+        String jobTitle = user.getJobTitle() != null && !user.getJobTitle().isBlank()
+                ? user.getJobTitle().trim() : "Empleado";
+        if (inventoryPersonRepository.existsByFullNameIgnoreCaseAndJobTitleIgnoreCaseAndActiveTrue(
+                user.getFullName(), jobTitle)) return;
+        InventoryPerson person = new InventoryPerson();
+        person.setFullName(user.getFullName());
+        person.setJobTitle(jobTitle);
+        inventoryPersonRepository.save(person);
     }
 
     @Transactional
@@ -318,6 +357,9 @@ public class InventoryService {
                 ? userRepository.findById(request.recipientId()).filter(User::getEnabled)
                         .orElseThrow(() -> new EntityNotFoundException("Recipient not found: " + request.recipientId()))
                 : null;
+        String recipientName = request.recipientName() != null && !request.recipientName().isBlank()
+                ? request.recipientName().trim()
+                : recipient != null ? recipient.getFullName() : null;
         StorageArea area = request.areaId() != null
                 ? areaRepository.findById(request.areaId())
                         .orElseThrow(() -> new EntityNotFoundException("Area not found: " + request.areaId()))
@@ -336,7 +378,7 @@ public class InventoryService {
         } else if (request.type() == MovementType.ENTRADA && purpose != MovementPurpose.PURCHASE) {
             throw new IllegalArgumentException("Una entrada debe registrarse como compra o ajuste.");
         }
-        if (request.type() == MovementType.SALIDA && recipient == null) {
+        if (request.type() == MovementType.SALIDA && (recipientName == null || recipientName.isBlank())) {
             throw new IllegalArgumentException("Indica a quién se entrega la salida del almacén.");
         }
         if (request.type() == MovementType.SALIDA && trackingType == TrackingType.FUEL
@@ -362,6 +404,7 @@ public class InventoryService {
                 .product(product)
                 .user(user)
                 .receivedBy(recipient)
+                .recipientName(recipientName)
                 .area(area)
                 .type(request.type())
                 .quantity(request.quantity())
@@ -429,6 +472,7 @@ public class InventoryService {
                 product.getCode(),
                 product.getName(),
                 product.getCategory(),
+                product.getVariant() != null ? product.getVariant() : "",
                 product.getStock(),
                 product.getMinimumStock(),
                 product.getLocation(),
@@ -440,6 +484,23 @@ public class InventoryService {
                                 List.of(AssetStatus.IN_STOCK, AssetStatus.ASSIGNED)))
                         : product.getStock()
         );
+    }
+
+    private String resolveProductCode(String requestedCode) {
+        if (productRepository.findByCode(requestedCode).isEmpty()) return requestedCode;
+        int separator = requestedCode.lastIndexOf('-');
+        if (separator < 0 || !requestedCode.substring(separator + 1).matches("\\d{3,}")) {
+            throw new IllegalArgumentException("El código de producto ya existe; vuelve a generar el código.");
+        }
+        String prefix = requestedCode.substring(0, separator + 1);
+        String suffix = requestedCode.substring(separator + 1);
+        BigInteger sequence = new BigInteger(suffix);
+        String candidate;
+        do {
+            sequence = sequence.add(BigInteger.ONE);
+            candidate = prefix + String.format(Locale.ROOT, "%0" + suffix.length() + "d", sequence);
+        } while (productRepository.findByCode(candidate).isPresent());
+        return candidate;
     }
 
     private UserResponse toUserResponse(User user) {
@@ -461,7 +522,8 @@ public class InventoryService {
                 movement.getUser().getId(),
                 movement.getUser().getFullName(),
                 movement.getReceivedBy() != null ? movement.getReceivedBy().getId() : null,
-                movement.getReceivedBy() != null ? movement.getReceivedBy().getFullName() : null,
+                movement.getRecipientName() != null ? movement.getRecipientName()
+                        : movement.getReceivedBy() != null ? movement.getReceivedBy().getFullName() : null,
                 movement.getArea() != null ? movement.getArea().getId() : null,
                 movement.getArea() != null ? movement.getArea().getName() : null,
                 movement.getAsset() != null ? movement.getAsset().getId() : null,

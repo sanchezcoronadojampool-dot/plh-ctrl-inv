@@ -18,12 +18,15 @@ describe('App', () => {
     getLoans: () => of([]),
     createProduct: vi.fn(() => of({})),
     createMovement: vi.fn(() => of({})),
+    createPerson: vi.fn(() => of({})),
+    createLoan: vi.fn(() => of({})),
     createAsset: vi.fn(() => throwError(() => ({
       error: { message: 'Registra primero la existencia de compra del producto; no puedes etiquetar más unidades que las existentes.' }
     })))
   };
 
   beforeEach(async () => {
+    vi.restoreAllMocks();
     vi.clearAllMocks();
     await TestBed.configureTestingModule({
       imports: [App],
@@ -105,14 +108,17 @@ describe('App', () => {
     app.products = [{ id: 8, code: 'F-1', name: 'Gasolina', category: 'Combustible', stock: 20, minimumStock: 3, location: 'Tanque', unit: 'galón', trackingType: 'FUEL' }];
     app.users = [{ id: 2, fullName: 'Operador', jobTitle: 'Mantenimiento' }];
     app.movementForm = {
-      productId: 8, userId: 2, recipientId: 2, areaId: 1, type: 'SALIDA', quantity: 0.5,
+      productId: 8, userId: 2, areaId: 1, type: 'SALIDA', quantity: 0.5,
       vehicleEquipment: 'Generador', reason: 'Prueba de planta', movementDate: '2026-01-01'
     };
+    app.users = [{ id: 2, fullName: 'Operador', jobTitle: 'Mantenimiento' }];
+    app.movementRecipientPersonId = 2;
 
     app.saveMovement();
 
     expect(inventoryService.createMovement).toHaveBeenCalledWith(expect.objectContaining({
-      productId: 8, recipientId: 2, quantity: 0.5, purpose: 'FUEL_USE', vehicleEquipment: 'Generador'
+      productId: 8, recipientId: undefined, recipientName: 'Operador', quantity: 0.5,
+      purpose: 'FUEL_USE', vehicleEquipment: 'Generador'
     }));
   });
 
@@ -133,13 +139,13 @@ describe('App', () => {
     expect(app.movementForm.type).toBe('SALIDA');
     expect(app.movementForm.productId).toBe(product.id);
     expect(app.movementForm.recipientId).toBeUndefined();
-    app.movementForm.recipientId = 5;
+    app.movementRecipientPersonId = 5;
     app.saveMovement();
 
     expect(inventoryService.createMovement).toHaveBeenCalledWith(expect.objectContaining({
-      productId: product.id, type: 'SALIDA', recipientId: 5, purpose: 'CONSUMPTION'
+      productId: product.id, type: 'SALIDA', recipientId: undefined, recipientName: 'Trabajador', purpose: 'CONSUMPTION'
     }));
-    expect(app.movementForm.recipientId).toBe(5);
+    expect(app.movementRecipientPersonId).toBe(0);
   });
 
   it('does not submit a quick delivery without a selected recipient', () => {
@@ -173,13 +179,13 @@ describe('App', () => {
     const app = fixture.componentInstance;
     app.startNewProduct();
     app.productForm = {
-      code: 'P-INITIAL', name: 'Producto inicial', category: 'Herramientas', stock: 12.5,
+      code: 'P-INITIAL', name: 'Producto inicial', category: 'Herramientas', stock: 12,
       minimumStock: 2, location: 'Almacén', unit: 'pza', trackingType: 'CONSUMABLE'
     };
 
     app.saveProduct();
 
-    expect(inventoryService.createProduct).toHaveBeenCalledWith(expect.objectContaining({ stock: 12.5 }));
+    expect(inventoryService.createProduct).toHaveBeenCalledWith(expect.objectContaining({ stock: 12 }));
   });
 
   it('shows the insufficient asset stock response in an actionable warning dialog', () => {
@@ -188,7 +194,7 @@ describe('App', () => {
     const app = fixture.componentInstance;
     app.assetForm = {
       productId: 2, assetCode: 'TV-002', serialNumber: '', areaId: 1,
-      responsibleId: 1, recordedById: 1, condition: 'GOOD'
+      responsiblePersonId: 0, responsibleName: 'Custodio', recordedById: 1, condition: 'GOOD'
     };
 
     app.saveAsset();
@@ -196,5 +202,50 @@ describe('App', () => {
     expect(app.showErrorModal).toBe(true);
     expect(app.isAssetStockWarning).toBe(true);
     expect(app.errorMessage).toContain('no puedes etiquetar más unidades');
+  });
+
+  it('generates a product code from category, product, variant and starting number', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const app = fixture.componentInstance;
+    app.startNewProduct();
+    app.productForm.name = 'WALKI TALKI';
+    app.productForm.variant = 'VERDE';
+    app.productCodeChanged();
+
+    expect(app.productForm.code).toBe('EQU-WAL-VER-001');
+  });
+
+  it('issues a loan to a registered worker without requiring an account', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const app = fixture.componentInstance;
+    app.currentUser = { id: 1, fullName: 'Administradora', jobTitle: 'Administradora',
+      role: 'ADMIN', email: 'admin@example.com' };
+    app.products = [{ id: 9, code: 'TOO-MAR-GEN-001', name: 'Martillo', category: 'HERRAMIENTAS',
+      stock: 5, minimumStock: 0, location: 'Almacén', unit: 'pza', trackingType: 'REUSABLE' }];
+    app.users = [{ id: 27, fullName: 'Trabajador sin cuenta', jobTitle: 'Mantenimiento' }];
+    app.areas = [{ id: 1, name: 'Almacén' }];
+    app.loanProductId = 9;
+    app.loanForm = { borrowerType: 'EMPLOYEE', borrowerPersonId: 27, borrowerName: '',
+      issuedById: 1, areaId: 1, purpose: 'Mantenimiento', dueAt: '' };
+
+    app.issueLoan();
+
+    expect(inventoryService.createLoan).toHaveBeenCalledWith(expect.objectContaining({
+      borrowerType: 'EMPLOYEE', borrowerPersonId: 27, borrowerName: null
+    }));
+  });
+
+  it('continues loading available catalogs when a separate catalog request fails', () => {
+    vi.spyOn(inventoryService, 'getProducts').mockReturnValue(throwError(() => ({
+      error: { message: 'Productos no disponibles' }
+    })));
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const app = fixture.componentInstance;
+
+    expect(app.areas).toEqual([{ id: 1, name: 'Almacén' }]);
+    expect(app.loadErrors.some((message) => message.includes('Productos'))).toBe(true);
   });
 });

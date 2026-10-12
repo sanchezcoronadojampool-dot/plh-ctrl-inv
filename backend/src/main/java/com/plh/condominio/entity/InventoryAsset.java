@@ -53,6 +53,9 @@ public class InventoryAsset {
     @JoinColumn(name = "responsible_user_id")
     private User responsible;
 
+    @Column(name = "responsible_name", length = 120)
+    private String responsibleName;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     @Builder.Default

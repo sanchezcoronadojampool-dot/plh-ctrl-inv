@@ -2,6 +2,12 @@
 
 Aplicación Angular + Spring Boot + PostgreSQL para controlar consumibles, combustible por unidad fraccionaria, activos con QR privado y préstamos con historial de devolución/condición. Cada condominio debe tener su propia instalación y base de datos.
 
+## Productos y personas
+
+Las cuentas de acceso son independientes del padrón de trabajadores. Registra a los trabajadores en **Personal** sin crearles correo ni contraseña; los préstamos permiten elegir un trabajador registrado o escribir el nombre de un propietario. Las salidas y custodias también guardan el nombre de la persona sin exigir que tenga una cuenta.
+
+Al crear un producto, el código se genera con el formato `CAT-PRO-VAR-001`: abreviaturas de tres letras de categoría, producto y variante, más el número inicial con tres dígitos. El formulario permite indicar una existencia inicial de 1 a 50; esa cantidad corresponde al stock de un solo producto y no crea claves distintas por unidad.
+
 ## Despliegue con Docker Compose
 
 La app se publica detrás del proxy compartido en su propio hostname; no expone puertos de frontend, backend ni PostgreSQL al host.

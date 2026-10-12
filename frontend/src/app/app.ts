@@ -1,12 +1,12 @@
 import { CommonModule } from '@angular/common';
 import { ChangeDetectorRef, Component, HostListener, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { TimeoutError, finalize, forkJoin, of, timeout } from 'rxjs';
+import { Observable, TimeoutError, catchError, finalize, forkJoin, of, timeout } from 'rxjs';
 import QRCode from 'qrcode';
 import { Area, Asset, DashboardSummary, InventoryPerson, ItemCondition, Loan, LoanLine, Movement, Product, QrAssetDetail, TrackingType, User } from './models';
 import { InventoryService } from './inventory.service';
 
-type Section = 'dashboard' | 'products' | 'movements' | 'assets' | 'loans' | 'users' | 'reports';
+type Section = 'dashboard' | 'products' | 'movements' | 'assets' | 'loans' | 'people' | 'users' | 'reports';
 type ProductSortKey = 'code' | 'name' | 'category' | 'stock';
 const CONDITIONS: ItemCondition[] = ['NEW', 'GOOD', 'FAIR', 'DAMAGED', 'OUT_OF_SERVICE'];
 
@@ -28,6 +28,7 @@ export class App implements OnInit {
   areas: Area[] = [];
   assets: Asset[] = [];
   loans: Loan[] = [];
+  loadErrors: string[] = [];
   currentUser: User | null = null;
   checkingSession = true;
   loginEmail = '';
@@ -60,6 +61,8 @@ export class App implements OnInit {
   selectedLoan: Loan | null = null;
   assetSearch = '';
   loanProductId = 0;
+  movementRecipientPersonId = 0;
+  productInitialNumber = 1;
   loanQuantity = 1;
   loanAssetIds = new Set<number>();
   returnLine: LoanLine | null = null;
@@ -70,15 +73,17 @@ export class App implements OnInit {
   showMovementForm = false;
   quickMovementMode = false;
   showUserForm = false;
+  showPersonForm = false;
   showAreaForm = false;
   showAssetForm = false;
   showLoanForm = false;
   readonly conditions = CONDITIONS;
   areaForm = { name: '', description: '' };
-  assetForm = { productId: 0, assetCode: '', serialNumber: '', areaId: 0, responsibleId: 0, recordedById: 0, condition: 'GOOD' as ItemCondition };
-  assignmentForm = { areaId: 0, responsibleId: 0, issuedById: 0, condition: 'GOOD' as ItemCondition, reason: '' };
-  loanForm = { borrowerId: 0, issuedById: 0, areaId: 0, purpose: '', dueAt: '' };
+  assetForm = { productId: 0, assetCode: '', serialNumber: '', areaId: 0, responsiblePersonId: 0, responsibleName: '', recordedById: 0, condition: 'GOOD' as ItemCondition };
+  assignmentForm = { areaId: 0, responsiblePersonId: 0, responsibleName: '', issuedById: 0, condition: 'GOOD' as ItemCondition, reason: '' };
+  loanForm = { borrowerType: 'EMPLOYEE' as 'EMPLOYEE' | 'OWNER', borrowerPersonId: 0, borrowerName: '', issuedById: 0, areaId: 0, purpose: '', dueAt: '' };
   returnForm = { receivedById: 0, returnedById: 0, areaId: 0 };
+  personForm = { fullName: '', jobTitle: '' };
 
   productForm: Product = this.emptyProduct();
   userForm: User = { fullName: '', jobTitle: '', role: 'INVENTORY_MANAGER', email: '', password: '' };
@@ -126,6 +131,10 @@ export class App implements OnInit {
 
   get isAdministrator(): boolean {
     return this.currentUser?.role === 'ADMIN';
+  }
+
+  get canManageInventory(): boolean {
+    return this.currentUser?.role === 'ADMIN' || this.currentUser?.role === 'INVENTORY_MANAGER';
   }
 
   get stockSummary(): string {
@@ -198,6 +207,7 @@ export class App implements OnInit {
       movements: 'Entradas y salidas',
       assets: 'Activos, áreas y códigos QR',
       loans: 'Préstamos y devoluciones',
+      people: 'Personal',
       users: 'Usuarios y permisos',
       reports: 'Reportes'
     };
@@ -206,6 +216,16 @@ export class App implements OnInit {
 
   get categories(): string[] {
     return [...new Set(this.products.map((product) => product.category))].sort((a, b) => a.localeCompare(b));
+  }
+
+  get productCategoryOptions(): string[] {
+    return [...new Set(['EQUIPO', 'HERRAMIENTAS', 'LIMPIEZA', 'SEGURIDAD', 'OFICINA', 'COMBUSTIBLE', 'ACTIVOS',
+      ...this.categories, this.productForm.category].filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right));
+  }
+
+  productCodeChanged(): void {
+    if (!this.editingProductId) this.updateGeneratedProductCode();
   }
 
   get lowStockProducts(): Product[] {
@@ -235,6 +255,19 @@ export class App implements OnInit {
     }
   }
 
+  movementRecipientChanged(id: number): void {
+    const person = this.users.find((candidate) => candidate.id === Number(id));
+    this.movementForm.recipientName = person?.fullName ?? '';
+  }
+
+  assetPersonChanged(id: number): void {
+    this.assetForm.responsibleName = this.users.find((person) => person.id === Number(id))?.fullName ?? '';
+  }
+
+  assignmentPersonChanged(id: number): void {
+    this.assignmentForm.responsibleName = this.users.find((person) => person.id === Number(id))?.fullName ?? '';
+  }
+
   get filteredAssets(): Asset[] {
     const query = this.assetSearch.trim().toLocaleLowerCase();
     return this.assets.filter((asset) => !query || `${asset.assetCode} ${asset.productName} ${asset.serialNumber ?? ''} ${asset.areaName ?? ''} ${asset.responsibleName ?? ''}`.toLocaleLowerCase().includes(query));
@@ -249,7 +282,7 @@ export class App implements OnInit {
   }
 
   get selectedReturnAssets(): Asset[] {
-    return this.returnLine?.assets.filter((asset) => asset.status === 'ON_LOAN' && this.selectedLoan?.borrowerId === asset.responsibleId) ?? [];
+    return this.returnLine?.assets.filter((asset) => asset.status === 'ON_LOAN') ?? [];
   }
 
   get filteredProducts(): Product[] {
@@ -297,15 +330,18 @@ export class App implements OnInit {
   loadAll(): void {
     this.loading = true;
     this.errorMessage = '';
+    this.loadErrors = [];
     forkJoin({
-      dashboard: this.inventoryService.getDashboard(),
-      products: this.inventoryService.getProducts(),
-      people: this.inventoryService.getPeople(),
-      accounts: this.isAdministrator ? this.inventoryService.getUsers() : of([] as User[]),
-      movements: this.inventoryService.getMovements(),
-      areas: this.inventoryService.getAreas(),
-      assets: this.inventoryService.getAssets(),
-      loans: this.inventoryService.getLoans()
+      dashboard: this.loadResource('Dashboard', this.inventoryService.getDashboard(), this.dashboard),
+      products: this.loadResource('Productos', this.inventoryService.getProducts(), this.products),
+      people: this.loadResource('Personal', this.inventoryService.getPeople(), this.users),
+      accounts: this.isAdministrator
+        ? this.loadResource('Cuentas', this.inventoryService.getUsers(), this.accountUsers)
+        : of([] as User[]),
+      movements: this.loadResource('Movimientos', this.inventoryService.getMovements(), this.movements),
+      areas: this.loadResource('Áreas', this.inventoryService.getAreas(), this.areas),
+      assets: this.loadResource('Activos', this.inventoryService.getAssets(), this.assets),
+      loans: this.loadResource('Préstamos', this.inventoryService.getLoans(), this.loans)
     }).pipe(timeout({ first: 30_000 }), finalize(() => {
       this.loading = false;
       this.changeDetector.markForCheck();
@@ -327,8 +363,8 @@ export class App implements OnInit {
           this.loanForm.issuedById = this.currentUser.id;
           this.returnForm.receivedById = this.currentUser.id;
         }
-        if (!this.loanForm.borrowerId && people.length) this.loanForm.borrowerId = people[0].id;
-        if (!this.assetForm.responsibleId && people.length) this.assetForm.responsibleId = people[0].id;
+        if (!this.loanForm.borrowerPersonId && people.length) this.loanForm.borrowerPersonId = people[0].id;
+        if (!this.assetForm.responsiblePersonId && people.length) this.assetForm.responsiblePersonId = people[0].id;
         if (!this.assetForm.areaId && areas.length) this.assetForm.areaId = areas[0].id;
         if (!this.loanForm.areaId && areas.length) this.loanForm.areaId = areas[0].id;
         if (!this.returnForm.areaId && areas.length) this.returnForm.areaId = areas[0].id;
@@ -348,6 +384,17 @@ export class App implements OnInit {
         this.changeDetector.markForCheck();
       }
     });
+  }
+
+  private loadResource<T>(label: string, request: Observable<T>, previousValue: T): Observable<T> {
+    return request.pipe(catchError((error: unknown) => {
+      if (this.isUnauthorized(error)) {
+        this.expireSession();
+      } else {
+        this.loadErrors.push(`${label}: ${this.errorText(error, 'No se pudo cargar este catálogo.')}`);
+      }
+      return of(previousValue);
+    }));
   }
 
   sortBy(key: ProductSortKey): void {
@@ -378,6 +425,9 @@ export class App implements OnInit {
   startNewProduct(): void {
     this.editingProductId = null;
     this.productForm = this.emptyProduct();
+    this.productInitialNumber = 1;
+    this.productForm.category = 'EQUIPO';
+    this.updateGeneratedProductCode();
     this.showProductForm = true;
   }
 
@@ -393,10 +443,13 @@ export class App implements OnInit {
       type: 'SALIDA',
       quantity: 1,
       reason: '',
+      recipientId: undefined,
+      recipientName: '',
       purpose: undefined,
       vehicleEquipment: '',
       movementDate: this.today()
     };
+    this.movementRecipientPersonId = 0;
     this.showMovementForm = true;
   }
 
@@ -429,7 +482,9 @@ export class App implements OnInit {
   }
 
   saveProduct(): void {
-    if (!this.productForm.code.trim() || !this.productForm.name.trim()) return;
+    if (!this.productForm.code.trim() || !this.productForm.name.trim() || !this.productForm.category.trim()
+        || (!this.editingProductId && this.productForm.stock !== undefined
+          && (!Number.isInteger(this.productForm.stock) || this.productForm.stock < 1 || this.productForm.stock > 50))) return;
     this.saving = true;
     const wasEditing = this.editingProductId !== null;
     const request = this.editingProductId
@@ -470,6 +525,23 @@ export class App implements OnInit {
     });
   }
 
+  savePerson(): void {
+    const fullName = this.personForm.fullName.trim();
+    const jobTitle = this.personForm.jobTitle.trim();
+    if (!fullName || !jobTitle) return;
+    this.runMutation(this.inventoryService.createPerson({ fullName, jobTitle }), 'Trabajador registrado.', (person) => {
+      if (this.loanForm.borrowerType === 'EMPLOYEE') this.loanForm.borrowerPersonId = person.id;
+      this.assetForm.responsiblePersonId = person.id;
+      this.assetForm.responsibleName = person.fullName;
+      this.assignmentForm.responsiblePersonId = person.id;
+      this.assignmentForm.responsibleName = person.fullName;
+      this.movementRecipientPersonId = person.id;
+      this.movementForm.recipientName = person.fullName;
+      this.personForm = { fullName: '', jobTitle: '' };
+      this.showPersonForm = false;
+    });
+  }
+
   deleteUser(user: User): void {
     if (!window.confirm(`¿Desactivar el acceso de ${user.fullName}? Su historial se conservará.`)) return;
     this.runMutation(this.inventoryService.deleteUser(user.id!), 'Acceso de usuario desactivado.');
@@ -478,11 +550,18 @@ export class App implements OnInit {
   saveMovement(): void {
     if (!this.movementForm.productId || !this.movementForm.userId || !this.movementForm.quantity
         || this.movementForm.quantity <= 0
-        || (this.movementForm.type === 'SALIDA' && !this.movementForm.recipientId)) return;
+        || (this.movementForm.type === 'SALIDA'
+          && !this.movementRecipientPersonId && !this.movementForm.recipientName?.trim())) return;
     const product = this.products.find((item) => item.id === Number(this.movementForm.productId));
     const purpose = this.movementForm.type === 'ENTRADA' ? 'PURCHASE'
       : product?.trackingType === 'FUEL' ? 'FUEL_USE' : 'CONSUMPTION';
-    this.runMutation(this.inventoryService.createMovement({ ...this.movementForm, purpose }), 'Movimiento registrado.', () => {
+    const recipient = this.users.find((person) => person.id === Number(this.movementRecipientPersonId));
+    this.runMutation(this.inventoryService.createMovement({
+      ...this.movementForm,
+      recipientId: undefined,
+      recipientName: recipient?.fullName ?? this.movementForm.recipientName?.trim(),
+      purpose
+    }), 'Movimiento registrado.', () => {
       this.showMovementForm = false;
       this.quickMovementMode = false;
       this.movementForm = {
@@ -496,6 +575,7 @@ export class App implements OnInit {
         vehicleEquipment: '',
         movementDate: this.today()
       };
+      this.movementRecipientPersonId = 0;
     });
   }
 
@@ -508,10 +588,17 @@ export class App implements OnInit {
   }
 
   saveAsset(): void {
-    if (!this.assetForm.productId || !this.assetForm.areaId || !this.assetForm.responsibleId || !this.assetForm.recordedById) return;
-    this.runMutation(this.inventoryService.createAsset(this.assetForm), 'Activo registrado y asignado.', () => {
+    const person = this.users.find((candidate) => candidate.id === Number(this.assetForm.responsiblePersonId));
+    const responsibleName = person?.fullName ?? this.assetForm.responsibleName.trim();
+    if (!this.assetForm.productId || !this.assetForm.areaId || !responsibleName || !this.assetForm.recordedById) return;
+    this.runMutation(this.inventoryService.createAsset({
+      ...this.assetForm,
+      responsibleId: undefined,
+      responsibleName
+    }), 'Activo registrado y asignado.', () => {
       this.assetForm.assetCode = '';
       this.assetForm.serialNumber = '';
+      this.assetForm.responsibleName = '';
       this.showAssetForm = false;
     });
   }
@@ -520,7 +607,8 @@ export class App implements OnInit {
     this.assetToAssign = asset;
     this.assignmentForm = {
       areaId: asset.areaId ?? this.areas[0]?.id ?? 0,
-      responsibleId: asset.responsibleId ?? this.users[0]?.id ?? 0,
+      responsiblePersonId: this.users.find((person) => person.fullName === asset.responsibleName)?.id ?? 0,
+      responsibleName: asset.responsibleName ?? '',
       issuedById: this.currentUser?.id ?? 0,
       condition: asset.condition,
       reason: ''
@@ -529,7 +617,14 @@ export class App implements OnInit {
 
   saveAssignment(): void {
     if (!this.assetToAssign) return;
-    this.runMutation(this.inventoryService.assignAsset(this.assetToAssign.id, this.assignmentForm), 'Asignación del activo actualizada.', () => this.assetToAssign = null);
+    const person = this.users.find((candidate) => candidate.id === Number(this.assignmentForm.responsiblePersonId));
+    const responsibleName = person?.fullName ?? this.assignmentForm.responsibleName.trim();
+    if (!responsibleName) return;
+    this.runMutation(this.inventoryService.assignAsset(this.assetToAssign.id, {
+      ...this.assignmentForm,
+      responsibleId: undefined,
+      responsibleName
+    }), 'Asignación del activo actualizada.', () => this.assetToAssign = null);
   }
 
   toggleLoanAsset(id: number, event: Event): void {
@@ -541,9 +636,14 @@ export class App implements OnInit {
     const product = this.selectedLoanProduct;
     const serialized = product?.trackingType === 'ASSET';
     const quantity = serialized ? this.loanAssetIds.size : Number(this.loanQuantity);
-    if (!product || quantity <= 0 || !this.loanForm.borrowerId || !this.loanForm.issuedById || !this.loanForm.areaId || !this.loanForm.purpose.trim()) return;
+    const employeeSelected = this.loanForm.borrowerType === 'EMPLOYEE' && !!this.loanForm.borrowerPersonId;
+    const ownerName = this.loanForm.borrowerName.trim();
+    if (!product || quantity <= 0 || (!employeeSelected && !(this.loanForm.borrowerType === 'OWNER' && ownerName))
+        || !this.loanForm.issuedById || !this.loanForm.areaId || !this.loanForm.purpose.trim()) return;
     this.runMutation(this.inventoryService.createLoan({
       ...this.loanForm,
+      borrowerPersonId: employeeSelected ? this.loanForm.borrowerPersonId : null,
+      borrowerName: this.loanForm.borrowerType === 'OWNER' ? ownerName : null,
       dueAt: this.loanForm.dueAt || null,
       items: [{ productId: product.id, quantity, conditionOut: 'GOOD', assetIds: serialized ? [...this.loanAssetIds] : [] }]
     }), 'Préstamo registrado.', () => {
@@ -552,6 +652,7 @@ export class App implements OnInit {
       this.loanAssetIds.clear();
       this.loanForm.purpose = '';
       this.loanForm.dueAt = '';
+      this.loanForm.borrowerName = '';
     });
   }
 
@@ -563,7 +664,7 @@ export class App implements OnInit {
     this.returnCondition = 'GOOD';
     this.returnForm = {
       receivedById: this.currentUser?.id ?? 0,
-      returnedById: loan.borrowerId,
+      returnedById: loan.borrowerId ?? 0,
       areaId: this.areas[0]?.id ?? loan.areaId
     };
   }
@@ -686,7 +787,7 @@ export class App implements OnInit {
 
   downloadExcel(): void {
     const rows = [
-      ['Fecha', 'Producto', 'Categoría', 'Tipo', 'Cantidad', 'Responsable', 'Motivo'],
+      ['Fecha', 'Producto', 'Categoría', 'Tipo', 'Cantidad', 'Registrado por', 'Entregado a', 'Motivo'],
       ...this.filteredMovements.map((movement) => [
         movement.movementDate ?? '',
         movement.productName ?? '',
@@ -694,6 +795,7 @@ export class App implements OnInit {
         movement.type,
         String(movement.quantity),
         movement.userName ?? '',
+        movement.recipientName ?? '',
         movement.reason ?? ''
       ])
     ];
@@ -716,18 +818,39 @@ export class App implements OnInit {
   }
 
   private emptyProduct(): Product {
-    return { code: '', name: '', category: 'Herramientas', stock: 0, minimumStock: 0, location: '', unit: 'pza', trackingType: 'CONSUMABLE' };
+    return { code: '', name: '', category: 'EQUIPO', variant: '', stock: 1, minimumStock: 0, location: '', unit: 'pza', trackingType: 'CONSUMABLE' };
   }
 
-  private runMutation<T>(request: import('rxjs').Observable<T>, success: string, afterSuccess?: () => void): void {
+  private updateGeneratedProductCode(): void {
+    const parts = [this.productForm.category, this.productForm.name, this.productForm.variant ?? '']
+      .map((value) => this.codePart(value));
+    const prefix = parts.join('-');
+    const initialNumber = Math.min(9999, Math.max(1, Math.floor(Number(this.productInitialNumber) || 1)));
+    const existingCodes = new Set(this.products.map((product) => product.code.toLocaleUpperCase()));
+    let sequence = initialNumber;
+    let code = `${prefix}-${String(sequence).padStart(3, '0')}`;
+    while (existingCodes.has(code.toLocaleUpperCase())) {
+      sequence += 1;
+      code = `${prefix}-${String(sequence).padStart(3, '0')}`;
+    }
+    this.productForm.code = code;
+  }
+
+  private codePart(value: string): string {
+    const firstWord = value.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .split(/[^a-zA-Z0-9]+/)[0] ?? '';
+    return firstWord.slice(0, 3).toLocaleUpperCase() || 'GEN';
+  }
+
+  private runMutation<T>(request: import('rxjs').Observable<T>, success: string, afterSuccess?: (result: T) => void): void {
     this.saving = true;
     this.clearMessages();
     request.pipe(timeout({ first: 30_000 }), finalize(() => {
       this.saving = false;
       this.changeDetector.markForCheck();
     })).subscribe({
-      next: () => {
-        afterSuccess?.();
+      next: (result) => {
+        afterSuccess?.(result);
         this.finishMutation(success);
       },
       error: (error: unknown) => this.handleMutationError(error)

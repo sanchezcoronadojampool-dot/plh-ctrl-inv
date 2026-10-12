@@ -40,6 +40,10 @@ public class Product {
     @Column(nullable = false, length = 80)
     private String category;
 
+    @Column(nullable = false, length = 80)
+    @Builder.Default
+    private String variant = "";
+
     @Column(nullable = false, precision = 14, scale = 3)
     @Builder.Default
     private BigDecimal stock = BigDecimal.ZERO;

@@ -20,6 +20,9 @@
       <button class="nav-btn" [class.active]="activeSection === 'loans'" (click)="navigate('loans')">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8m-8 4h5m5 7v-3"/></svg>Préstamos
       </button>
+      <button class="nav-btn" [class.active]="activeSection === 'people'" (click)="navigate('people')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0m2-13a4 4 0 0 1 0 8m2 2a6 6 0 0 1 2 3"/></svg>Personal
+      </button>
       <button *ngIf="isAdministrator" class="nav-btn" [class.active]="activeSection === 'users'" (click)="navigate('users')">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0m2-13a4 4 0 0 1 0 8m2 2a6 6 0 0 1 2 3"/></svg>Usuarios
       </button>
@@ -43,6 +46,11 @@
     </header>
 
     <div *ngIf="successMessage" class="alert success-alert" role="status">{{ successMessage }}</div>
+    <div *ngIf="loadErrors.length" class="alert error-alert" role="alert">
+      <strong>No se pudieron cargar algunos datos:</strong>
+      <ul><li *ngFor="let loadError of loadErrors">{{ loadError }}</li></ul>
+      <button type="button" class="text-button" (click)="loadAll()">Reintentar</button>
+    </div>
     <div *ngIf="loading" class="loading-bar" role="status">Cargando información del inventario…</div>
 
     <ng-container *ngIf="activeSection === 'dashboard'">
@@ -108,7 +116,7 @@
               <tr *ngFor="let product of pagedProducts">
                 <td class="check-cell"><input type="checkbox" [checked]="selectedIds.has(product.id!)" (change)="toggleSelection(product.id!, $event)" [attr.aria-label]="'Seleccionar ' + product.name" /></td>
                 <td class="code-cell">{{ product.code }}</td>
-                <td><div class="product-cell"><span class="product-avatar">{{ product.name.slice(0, 1) }}</span><strong>{{ product.name }}</strong></div></td>
+                <td><div class="product-cell"><span class="product-avatar">{{ product.name.slice(0, 1) }}</span><span><strong>{{ product.name }}</strong><small *ngIf="product.variant">{{ product.variant }}</small></span></div></td>
                 <td>{{ product.category }}</td>
                 <td><span class="stock-pill" [class.zero]="product.stock === 0" [class.low]="product.stock > 0 && product.stock <= product.minimumStock" [class.ok]="product.stock > product.minimumStock">{{ product.stock }} {{ product.unit }}</span></td>
                 <td>{{ product.location }}</td>
@@ -135,16 +143,18 @@
         <button class="modal-close" type="button" (click)="showProductForm = false" aria-label="Cerrar">×</button>
         <div class="section-heading"><div><h2 id="product-form-title">{{ editingProductId ? 'Editar producto' : 'Registrar producto' }}</h2><p>Los cambios se guardan en la base de datos</p></div></div>
         <form class="form-grid product-form" (ngSubmit)="saveProduct()">
-          <label><span>Código</span><input name="productCode" [(ngModel)]="productForm.code" required maxlength="40" /></label>
-          <label><span>Nombre</span><input name="productName" [(ngModel)]="productForm.name" required maxlength="120" /></label>
-          <label><span>Categoría</span><input name="productCategory" [(ngModel)]="productForm.category" required maxlength="80" /></label>
+          <label><span>Categoría</span><select name="productCategory" [(ngModel)]="productForm.category" (ngModelChange)="productCodeChanged()" required><option *ngFor="let category of productCategoryOptions" [ngValue]="category">{{ category }}</option></select></label>
+          <label><span>Producto</span><input name="productName" [(ngModel)]="productForm.name" (ngModelChange)="productCodeChanged()" required maxlength="120" /></label>
+          <label><span>Variante</span><input name="productVariant" [(ngModel)]="productForm.variant" (ngModelChange)="productCodeChanged()" maxlength="80" placeholder="Color, modelo…" /></label>
+          <label *ngIf="!editingProductId"><span>Número inicial</span><input name="productInitialNumber" type="number" min="1" max="9999" [(ngModel)]="productInitialNumber" (ngModelChange)="productCodeChanged()" required /></label>
+          <label><span>Código {{ editingProductId ? '' : 'generado' }}</span><input name="productCode" [(ngModel)]="productForm.code" readonly required maxlength="40" /><small *ngIf="!editingProductId">Formato: CAT-PRO-VAR-001</small></label>
           <label><span>Tipo de seguimiento</span><select name="productTrackingType" [(ngModel)]="productForm.trackingType" required><option value="CONSUMABLE">Consumible</option><option value="REUSABLE">Reutilizable / préstamo</option><option value="ASSET">Activo individual con QR</option><option value="FUEL">Combustible (galones)</option></select></label>
-          <label *ngIf="!editingProductId"><span>Existencia inicial</span><input name="productStock" type="number" min="0" [step]="productForm.trackingType === 'ASSET' ? '1' : '0.001'" [(ngModel)]="productForm.stock" required /><small>Si ya tienes unidades, se registrarán como entrada inicial y quedarán en el historial.</small></label>
+          <label *ngIf="!editingProductId"><span>Cantidad (1–50)</span><input name="productStock" type="number" min="1" max="50" step="1" [(ngModel)]="productForm.stock" required /><small>Se crea un producto con esta existencia inicial y una sola clave.</small></label>
           <label *ngIf="editingProductId"><span>Stock actual</span><input name="productStock" type="number" min="0" step="0.001" [(ngModel)]="productForm.stock" readonly required /><small>El stock solo cambia al registrar entradas, salidas, préstamos o devoluciones.</small></label>
           <label><span>Stock mínimo</span><input name="productMinimum" type="number" min="0" [(ngModel)]="productForm.minimumStock" required /></label>
           <label><span>Unidad</span><input name="productUnit" [(ngModel)]="productForm.unit" required maxlength="40" placeholder="pza, caja…" /></label>
           <label><span>Ubicación</span><input name="productLocation" [(ngModel)]="productForm.location" required maxlength="80" /></label>
-          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving">{{ saving ? 'Guardando…' : editingProductId ? 'Guardar cambios' : 'Guardar producto' }}</button></div>
+          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving || (!editingProductId && (productForm.stock! < 1 || productForm.stock! > 50))">{{ saving ? 'Guardando…' : editingProductId ? 'Guardar cambios' : 'Guardar producto' }}</button></div>
         </form>
         </section>
       </div>
@@ -163,19 +173,20 @@
           <label *ngIf="!quickMovementMode"><span>Tipo de movimiento</span><select name="movementType" [(ngModel)]="movementForm.type" (ngModelChange)="movementTypeChanged()" required><option value="ENTRADA">Entrada / compra</option><option value="SALIDA">Salida / entrega</option></select></label>
           <label><span>Cantidad ({{ selectedMovementProduct?.unit || 'unidades' }})</span><input name="movementQuantity" type="number" min="0.001" [max]="movementForm.type === 'SALIDA' ? selectedMovementProduct?.stock ?? null : null" [step]="selectedMovementProduct?.trackingType === 'ASSET' ? '1' : '0.001'" [(ngModel)]="movementForm.quantity" required /></label>
           <label *ngIf="!quickMovementMode"><span>Registrado por</span><input [value]="currentUser.fullName" readonly /></label>
-          <label><span>Entregar a</span><select name="movementRecipient" [(ngModel)]="movementForm.recipientId" [required]="movementForm.type === 'SALIDA'"><option [ngValue]="undefined">Selecciona trabajador</option><option *ngFor="let user of users" [ngValue]="user.id">{{ user.fullName }} · {{ user.jobTitle }}</option></select></label>
+          <label><span>Entregar a</span><select name="movementRecipient" [(ngModel)]="movementRecipientPersonId" (ngModelChange)="movementRecipientChanged($event)" [required]="movementForm.type === 'SALIDA' && !movementForm.recipientName?.trim()"><option [ngValue]="0">Selecciona trabajador registrado o escribe un nombre</option><option *ngFor="let person of users" [ngValue]="person.id">{{ person.fullName }} · {{ person.jobTitle }}</option></select><button *ngIf="canManageInventory && movementForm.type === 'SALIDA'" class="text-button" type="button" (click)="showPersonForm = true">+ Registrar trabajador</button></label>
+          <label *ngIf="movementForm.type === 'SALIDA' && !movementRecipientPersonId"><span>Nombre de quien recibe</span><input name="movementRecipientName" [(ngModel)]="movementForm.recipientName" required maxlength="120" /></label>
           <label *ngIf="!quickMovementMode"><span>Área destino</span><select name="movementArea" [(ngModel)]="movementForm.areaId"><option [ngValue]="undefined">— No especificada —</option><option *ngFor="let area of areas" [ngValue]="area.id">{{ area.name }}</option></select></label>
           <label *ngIf="!quickMovementMode"><span>Fecha</span><input name="movementDate" type="date" [(ngModel)]="movementForm.movementDate" required /></label>
           <label *ngIf="selectedMovementProduct?.trackingType === 'FUEL' && movementForm.type === 'SALIDA'"><span>Vehículo o equipo abastecido</span><input name="fuelEquipment" [(ngModel)]="movementForm.vehicleEquipment" required maxlength="120" placeholder="Vehículo, generador, equipo…" /></label>
           <label *ngIf="!quickMovementMode || selectedMovementProduct?.trackingType === 'FUEL'" class="span-two"><span>Motivo / uso</span><input name="movementReason" [(ngModel)]="movementForm.reason" [required]="selectedMovementProduct?.trackingType === 'FUEL' && movementForm.type === 'SALIDA'" maxlength="200" [placeholder]="movementForm.type === 'ENTRADA' ? 'Compra o reposición…' : 'Motivo de entrega…'" /></label>
-          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving || !products.length || !users.length || (movementForm.type === 'SALIDA' && !movementForm.recipientId)">{{ saving ? 'Guardando…' : quickMovementMode ? 'Confirmar entrega' : movementForm.type === 'ENTRADA' ? 'Registrar entrada' : 'Registrar salida' }}</button></div>
+          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving || !movementProducts.length || (movementForm.type === 'SALIDA' && !movementForm.recipientId && !movementForm.recipientName?.trim())">{{ saving ? 'Guardando…' : quickMovementMode ? 'Confirmar entrega' : movementForm.type === 'ENTRADA' ? 'Registrar entrada' : 'Registrar salida' }}</button></div>
         </form>
         </section>
       </div>
       <section class="panel">
         <div class="section-heading"><div><h2>Historial de movimientos</h2><p>Registro de entradas y salidas del inventario</p></div></div>
-        <div class="table-scroll"><table><thead><tr><th>Fecha</th><th>Producto</th><th>Tipo</th><th>Cantidad</th><th>Responsable</th><th>Motivo</th></tr></thead>
-          <tbody><tr *ngFor="let movement of movements"><td>{{ movement.movementDate | date:'dd/MM/yyyy' }}</td><td class="primary-cell">{{ movement.productName }}</td><td><span class="status" [class.incoming]="movement.type === 'ENTRADA'" [class.outgoing]="movement.type === 'SALIDA'">{{ movement.type === 'ENTRADA' ? 'Entrada' : 'Salida' }}</span></td><td>{{ movement.quantity }}</td><td>{{ movement.userName }}</td><td>{{ movement.reason || '—' }}</td></tr><tr *ngIf="!movements.length"><td colspan="6" class="empty-state">Aún no hay movimientos.</td></tr></tbody>
+        <div class="table-scroll"><table><thead><tr><th>Fecha</th><th>Producto</th><th>Tipo</th><th>Cantidad</th><th>Registrado por</th><th>Entregado a</th><th>Motivo</th></tr></thead>
+          <tbody><tr *ngFor="let movement of movements"><td>{{ movement.movementDate | date:'dd/MM/yyyy' }}</td><td class="primary-cell">{{ movement.productName }}</td><td><span class="status" [class.incoming]="movement.type === 'ENTRADA'" [class.outgoing]="movement.type === 'SALIDA'">{{ movement.type === 'ENTRADA' ? 'Entrada' : 'Salida' }}</span></td><td>{{ movement.quantity }}</td><td>{{ movement.userName }}</td><td>{{ movement.recipientName || '—' }}</td><td>{{ movement.reason || '—' }}</td></tr><tr *ngIf="!movements.length"><td colspan="7" class="empty-state">Aún no hay movimientos.</td></tr></tbody>
         </table></div>
       </section>
     </ng-container>
@@ -208,10 +219,11 @@
           <label><span>Código del activo</span><input name="assetCode" [(ngModel)]="assetForm.assetCode" required maxlength="60" placeholder="RADIO-001" /></label>
           <label><span>Número de serie</span><input name="assetSerial" [(ngModel)]="assetForm.serialNumber" maxlength="100" /></label>
           <label><span>Área / ubicación</span><select name="assetArea" [(ngModel)]="assetForm.areaId" required><option [ngValue]="0" disabled>Selecciona</option><option *ngFor="let area of areas" [ngValue]="area.id">{{ area.name }}</option></select></label>
-          <label><span>Responsable actual</span><select name="assetResponsible" [(ngModel)]="assetForm.responsibleId" required><option [ngValue]="0" disabled>Selecciona</option><option *ngFor="let user of users" [ngValue]="user.id">{{ user.fullName }}</option></select></label>
+          <label><span>Responsable actual</span><select name="assetResponsible" [(ngModel)]="assetForm.responsiblePersonId" (ngModelChange)="assetPersonChanged($event)"><option [ngValue]="0">Otro (escribir nombre)</option><option *ngFor="let person of users" [ngValue]="person.id">{{ person.fullName }} · {{ person.jobTitle }}</option></select><button *ngIf="canManageInventory" class="text-button" type="button" (click)="showPersonForm = true">+ Registrar trabajador</button></label>
+          <label *ngIf="!assetForm.responsiblePersonId"><span>Nombre del responsable</span><input name="assetResponsibleName" [(ngModel)]="assetForm.responsibleName" required maxlength="120" /></label>
           <label><span>Condición</span><select name="assetCondition" [(ngModel)]="assetForm.condition"><option *ngFor="let condition of conditions" [ngValue]="condition">{{ conditionLabel(condition) }}</option></select></label>
           <label><span>Registrado por</span><input [value]="currentUser.fullName" readonly /></label>
-          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving || !assetProducts.length || !users.length || !areas.length">Registrar activo y QR</button></div>
+          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving || !assetProducts.length || !areas.length">Registrar activo y QR</button></div>
         </form>
         </section>
       </div>
@@ -239,7 +251,9 @@
         <button class="modal-close" type="button" (click)="showLoanForm = false" aria-label="Cerrar">×</button>
         <div class="section-heading"><div><h2 id="loan-form-title">Registrar préstamo</h2><p>Herramientas reutilizables o activos serializados</p></div></div>
         <form class="form-grid modal-form" (ngSubmit)="issueLoan()">
-          <label><span>Persona que recibe</span><select name="loanBorrower" [(ngModel)]="loanForm.borrowerId" required><option *ngFor="let user of users" [ngValue]="user.id">{{ user.fullName }} · {{ user.jobTitle }}</option></select></label>
+          <label><span>Tipo de beneficiario</span><select name="loanBorrowerType" [(ngModel)]="loanForm.borrowerType" required><option value="EMPLOYEE">Trabajador</option><option value="OWNER">Propietario</option></select></label>
+          <label *ngIf="loanForm.borrowerType === 'EMPLOYEE'"><span>Trabajador que recibe</span><select name="loanBorrowerPerson" [(ngModel)]="loanForm.borrowerPersonId" required><option [ngValue]="0" disabled>Selecciona trabajador</option><option *ngFor="let person of users" [ngValue]="person.id">{{ person.fullName }} · {{ person.jobTitle }}</option></select><small *ngIf="!users.length">Registra primero al trabajador en Personal.</small><button *ngIf="canManageInventory" class="text-button" type="button" (click)="showPersonForm = true">+ Agregar trabajador si no existe</button></label>
+          <label *ngIf="loanForm.borrowerType === 'OWNER'"><span>Nombre del propietario</span><input name="loanOwnerName" [(ngModel)]="loanForm.borrowerName" required maxlength="120" /></label>
           <label><span>Entregado por</span><input [value]="currentUser.fullName" readonly /></label>
           <label><span>Área de uso</span><select name="loanArea" [(ngModel)]="loanForm.areaId" required><option *ngFor="let area of areas" [ngValue]="area.id">{{ area.name }}</option></select></label>
           <label><span>Producto</span><select name="loanProduct" [(ngModel)]="loanProductId" required><option *ngFor="let product of loanProducts" [ngValue]="product.id">{{ product.code }} · {{ product.name }} ({{ product.trackingType === 'ASSET' ? product.availableStock : product.stock }} disponible)</option></select></label>
@@ -249,7 +263,7 @@
           <div class="span-two" *ngIf="selectedLoanProduct?.trackingType === 'ASSET'"><span class="field-label">Unidades disponibles</span>
             <div class="selection-list"><label *ngFor="let asset of availableLoanAssets"><input type="checkbox" [checked]="loanAssetIds.has(asset.id)" (change)="toggleLoanAsset(asset.id, $event)" />{{ asset.assetCode }} · {{ asset.productName }} · {{ asset.areaName }} · {{ conditionLabel(asset.condition) }}</label><span *ngIf="!availableLoanAssets.length">No hay unidades disponibles.</span></div>
           </div>
-          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving || !loanProducts.length || !areas.length || !users.length">Registrar préstamo</button></div>
+          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving || !loanProducts.length || !areas.length || (loanForm.borrowerType === 'EMPLOYEE' && !users.length)">Registrar préstamo</button></div>
         </form>
         </section>
       </div>
@@ -264,6 +278,29 @@
           <small>Entregado por {{ loan.issuedByName }} · {{ loan.areaName }} · {{ loan.issuedAt | date:'dd/MM/yyyy' }}<span *ngIf="loan.dueAt"> · Límite {{ loan.dueAt | date:'dd/MM/yyyy' }}</span></small>
         </article><p *ngIf="!loans.length" class="empty-state">Aún no se han registrado préstamos.</p></div>
       </section>
+    </ng-container>
+
+    <ng-container *ngIf="activeSection === 'people'">
+      <section class="panel">
+        <div class="section-heading"><div><h2>Personal del condominio</h2><p>Registra a las personas que reciben artículos; no necesitan cuenta de acceso al sistema.</p></div><button *ngIf="canManageInventory" class="primary-btn" type="button" (click)="showPersonForm = true">+ Registrar trabajador</button></div>
+      </section>
+      <section class="user-grid">
+        <article class="user-card" *ngFor="let person of users">
+          <span class="user-avatar">{{ initials(person.fullName) }}</span><div class="user-info"><strong>{{ person.fullName }}</strong><span>{{ person.jobTitle }}</span></div>
+        </article>
+        <p *ngIf="!users.length" class="panel empty-state">No hay trabajadores registrados todavía.</p>
+      </section>
+      <div class="modal-backdrop" *ngIf="showPersonForm" (click)="showPersonForm = false">
+        <section class="detail-modal form-dialog" role="dialog" aria-modal="true" aria-labelledby="person-form-title" (click)="$event.stopPropagation()">
+          <button class="modal-close" type="button" (click)="showPersonForm = false" aria-label="Cerrar">×</button>
+          <div class="section-heading"><div><h2 id="person-form-title">Registrar trabajador</h2><p>Esto no crea una cuenta ni contraseña.</p></div></div>
+          <form class="form-grid modal-form" (ngSubmit)="savePerson()">
+            <label><span>Nombre completo</span><input name="personFullName" [(ngModel)]="personForm.fullName" required maxlength="120" /></label>
+            <label><span>Función / cargo</span><input name="personJobTitle" [(ngModel)]="personForm.jobTitle" required maxlength="80" /></label>
+            <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving || !personForm.fullName.trim() || !personForm.jobTitle.trim()">Guardar trabajador</button></div>
+          </form>
+        </section>
+      </div>
     </ng-container>
 
     <ng-container *ngIf="activeSection === 'users'">
@@ -316,8 +353,8 @@
           <span><strong>Registros:</strong> {{ filteredMovements.length }}</span>
         </div>
         <div class="section-heading"><div><h2>Resultados</h2><p>{{ filteredMovements.length }} movimientos encontrados</p></div></div>
-        <div class="table-scroll"><table id="report-table"><thead><tr><th>Fecha</th><th>Producto</th><th>Categoría</th><th>Tipo</th><th>Cantidad</th><th>Responsable</th><th>Motivo</th></tr></thead>
-          <tbody><tr *ngFor="let movement of filteredMovements"><td>{{ movement.movementDate | date:'dd/MM/yyyy' }}</td><td>{{ movement.productName }}</td><td>{{ categoryForMovement(movement) }}</td><td>{{ movement.type === 'ENTRADA' ? 'Entrada' : 'Salida' }}</td><td>{{ movement.quantity }}</td><td>{{ movement.userName }}</td><td>{{ movement.reason || '—' }}</td></tr><tr *ngIf="!filteredMovements.length"><td colspan="7" class="empty-state">No hay movimientos para los filtros seleccionados.</td></tr></tbody>
+        <div class="table-scroll"><table id="report-table"><thead><tr><th>Fecha</th><th>Producto</th><th>Categoría</th><th>Tipo</th><th>Cantidad</th><th>Registrado por</th><th>Entregado a</th><th>Motivo</th></tr></thead>
+          <tbody><tr *ngFor="let movement of filteredMovements"><td>{{ movement.movementDate | date:'dd/MM/yyyy' }}</td><td>{{ movement.productName }}</td><td>{{ categoryForMovement(movement) }}</td><td>{{ movement.type === 'ENTRADA' ? 'Entrada' : 'Salida' }}</td><td>{{ movement.quantity }}</td><td>{{ movement.userName }}</td><td>{{ movement.recipientName || '—' }}</td><td>{{ movement.reason || '—' }}</td></tr><tr *ngIf="!filteredMovements.length"><td colspan="8" class="empty-state">No hay movimientos para los filtros seleccionados.</td></tr></tbody>
         </table></div>
       </section>
     </ng-container>
@@ -362,7 +399,8 @@
       <p class="eyebrow">Cambio de custodia</p><h2 id="assign-title">{{ assetToAssign.assetCode }}</h2>
       <form class="form-grid modal-form" (ngSubmit)="saveAssignment()">
         <label><span>Área</span><select name="assignmentArea" [(ngModel)]="assignmentForm.areaId" required><option *ngFor="let area of areas" [ngValue]="area.id">{{ area.name }}</option></select></label>
-        <label><span>Responsable</span><select name="assignmentResponsible" [(ngModel)]="assignmentForm.responsibleId" required><option *ngFor="let user of users" [ngValue]="user.id">{{ user.fullName }}</option></select></label>
+        <label><span>Responsable</span><select name="assignmentResponsible" [(ngModel)]="assignmentForm.responsiblePersonId" (ngModelChange)="assignmentPersonChanged($event)"><option [ngValue]="0">Otro (escribir nombre)</option><option *ngFor="let person of users" [ngValue]="person.id">{{ person.fullName }}</option></select><button *ngIf="canManageInventory" class="text-button" type="button" (click)="showPersonForm = true">+ Registrar trabajador</button></label>
+        <label *ngIf="!assignmentForm.responsiblePersonId"><span>Nombre del responsable</span><input name="assignmentResponsibleName" [(ngModel)]="assignmentForm.responsibleName" required maxlength="120" /></label>
         <label><span>Registrado por</span><input [value]="currentUser.fullName" readonly /></label>
         <label><span>Condición</span><select name="assignmentCondition" [(ngModel)]="assignmentForm.condition"><option *ngFor="let condition of conditions" [ngValue]="condition">{{ conditionLabel(condition) }}</option></select></label>
         <label class="span-two"><span>Motivo</span><input name="assignmentReason" [(ngModel)]="assignmentForm.reason" maxlength="200" required /></label>

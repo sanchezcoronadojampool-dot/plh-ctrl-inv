@@ -17,6 +17,7 @@ import com.plh.condominio.dto.QrAssetDetailResponse;
 import com.plh.condominio.dto.UserRequest;
 import com.plh.condominio.dto.UserResponse;
 import com.plh.condominio.dto.InventoryPersonResponse;
+import com.plh.condominio.dto.InventoryPersonRequest;
 import com.plh.condominio.dto.StockLedgerEntryResponse;
 import com.plh.condominio.dto.StockReconciliationResponse;
 import com.plh.condominio.service.InventoryService;
@@ -80,6 +81,11 @@ public class InventoryController {
     @GetMapping("/people")
     public List<InventoryPersonResponse> getPeople() {
         return inventoryService.getPeople();
+    }
+
+    @PostMapping("/people")
+    public ResponseEntity<InventoryPersonResponse> createPerson(@Valid @RequestBody InventoryPersonRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(inventoryService.createPerson(request));
     }
 
     @PostMapping("/users")

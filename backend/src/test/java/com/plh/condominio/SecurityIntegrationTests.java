@@ -66,6 +66,18 @@ class SecurityIntegrationTests {
     }
 
     @Test
+    void inventoryManagersCanRegisterPeopleWithoutCreatingAccounts() throws Exception {
+        mockMvc.perform(post("/api/people").with(user("manager").roles("INVENTORY_MANAGER")).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fullName":"Personal sin cuenta","jobTitle":"Mantenimiento"}
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.fullName")
+                        .value("Personal sin cuenta"));
+    }
+
+    @Test
     void stateChangingRequestsRequireCsrfEvenForAdministrators() throws Exception {
         String request = """
                 {"name":"Pruebas de seguridad","description":"Área temporal"}

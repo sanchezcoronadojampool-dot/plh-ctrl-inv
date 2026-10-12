@@ -11,10 +11,15 @@ public record ProductRequest(
         @NotBlank String code,
         @NotBlank String name,
         @NotBlank String category,
+        String variant,
         @NotNull @DecimalMin("0.000") @Digits(integer = 11, fraction = 3) BigDecimal stock,
         @NotNull @DecimalMin("0.000") @Digits(integer = 11, fraction = 3) BigDecimal minimumStock,
         @NotBlank String location,
         @NotBlank String unit,
         TrackingType trackingType
 ) {
+    public ProductRequest(String code, String name, String category, BigDecimal stock, BigDecimal minimumStock,
+            String location, String unit, TrackingType trackingType) {
+        this(code, name, category, "", stock, minimumStock, location, unit, trackingType);
+    }
 }

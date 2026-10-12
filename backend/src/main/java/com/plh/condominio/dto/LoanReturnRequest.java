@@ -7,7 +7,7 @@ import java.util.List;
 
 public record LoanReturnRequest(
         @NotNull Long receivedById,
-        @NotNull Long returnedById,
+        Long returnedById,
         @NotNull Long areaId,
         @NotEmpty List<@Valid LoanReturnItemRequest> items
 ) {

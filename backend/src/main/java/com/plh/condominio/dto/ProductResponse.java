@@ -8,6 +8,7 @@ public record ProductResponse(
         String code,
         String name,
         String category,
+        String variant,
         BigDecimal stock,
         BigDecimal minimumStock,
         String location,

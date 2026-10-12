@@ -10,10 +10,12 @@ import com.plh.condominio.dto.LoanRequest;
 import com.plh.condominio.dto.LoanReturnItemRequest;
 import com.plh.condominio.dto.LoanReturnRequest;
 import com.plh.condominio.dto.LoanResponse;
+import com.plh.condominio.dto.InventoryPersonRequest;
 import com.plh.condominio.dto.MovementRequest;
 import com.plh.condominio.dto.ProductRequest;
 import com.plh.condominio.dto.ProductResponse;
 import com.plh.condominio.entity.AssetStatus;
+import com.plh.condominio.entity.BorrowerType;
 import com.plh.condominio.entity.InventoryAsset;
 import com.plh.condominio.entity.ItemCondition;
 import com.plh.condominio.entity.MovementPurpose;
@@ -115,6 +117,23 @@ class CondominioApplicationTests {
 	}
 
 	@Test
+	@Transactional
+	void advancesGeneratedProductCodeWhenTheSuggestedCodeAlreadyExists() {
+		User operator = findUser("Encargado");
+		AuthenticatedUser principal = AuthenticatedUser.from(operator);
+		SecurityContextHolder.getContext().setAuthentication(
+				new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities()));
+		try {
+			ProductRequest request = new ProductRequest("EQU-WAL-VER-001", "Walkie Talkie", "EQUIPO",
+					"VERDE", BigDecimal.ONE, BigDecimal.ZERO, "Almacén", "unidad", TrackingType.CONSUMABLE);
+			assertEquals("EQU-WAL-VER-001", inventoryService.createProduct(request).code());
+			assertEquals("EQU-WAL-VER-002", inventoryService.createProduct(request).code());
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
 	void rejectsOversizedSerializedAssetQuantityAsValidationError() {
 		User borrower = findUser("Residente");
 		User operator = findUser("Encargado");
@@ -151,6 +170,44 @@ class CondominioApplicationTests {
 						new BigDecimal("0.500"), ItemCondition.GOOD, List.of()))));
 		assertEquals("CLOSED", closed.status().name());
 		assertEquals(0, new BigDecimal("4.000").compareTo(productRepository.findById(tool.getId()).orElseThrow().getStock()));
+	}
+
+	@Test
+	@Transactional
+	void issuesLoanToWorkerWithoutAnAccessAccount() {
+		User operator = findUser("Encargado");
+		StorageArea area = findArea("Almacén");
+		Product tool = productRepository.findByCode("P-1002").orElseThrow();
+		var person = inventoryService.createPerson(new InventoryPersonRequest("Trabajador sin cuenta", "Mantenimiento"));
+
+		LoanResponse issued = operationsService.issueLoan(new LoanRequest(
+				null, person.id(), BorrowerType.EMPLOYEE, null, operator.getId(), area.getId(),
+				"Mantenimiento", null, List.of(new LoanItemRequest(tool.getId(), BigDecimal.ONE,
+						ItemCondition.GOOD, List.of()))));
+
+		assertEquals(person.fullName(), issued.borrowerName());
+		assertEquals(BorrowerType.EMPLOYEE, issued.borrowerType());
+		assertEquals(null, issued.borrowerId());
+	}
+
+	@Test
+	@Transactional
+	void issuesAndReturnsLoanToOwnerUsingNameOnly() {
+		User operator = findUser("Encargado");
+		StorageArea area = findArea("Almacén");
+		Product tool = productRepository.findByCode("P-1002").orElseThrow();
+		LoanResponse issued = operationsService.issueLoan(new LoanRequest(
+				null, null, BorrowerType.OWNER, "Propietaria de prueba", operator.getId(), area.getId(),
+				"Revisión especial", null,
+				List.of(new LoanItemRequest(tool.getId(), BigDecimal.ONE, ItemCondition.GOOD, List.of()))));
+
+		assertEquals("Propietaria de prueba", issued.borrowerName());
+		LoanResponse returned = operationsService.returnLoan(issued.id(), new LoanReturnRequest(
+				operator.getId(), null, area.getId(),
+				List.of(new LoanReturnItemRequest(issued.items().getFirst().id(), BigDecimal.ONE,
+						ItemCondition.GOOD, List.of()))));
+		assertEquals("CLOSED", returned.status().name());
+		assertEquals("Propietaria de prueba", returned.borrowerName());
 	}
 
 	@Test
@@ -210,6 +267,21 @@ class CondominioApplicationTests {
 		var qrDetail = operationsService.getAssetByQr(television.getQrToken());
 		assertEquals(AssetStatus.ASSIGNED, qrDetail.asset().status());
 		assertFalse(qrDetail.history().isEmpty());
+	}
+
+	@Test
+	@Transactional
+	void recordsDeliveryToPersonWithoutAnAccessAccount() {
+		User operator = findUser("Encargado");
+		Product product = productRepository.findByCode("P-3001").orElseThrow();
+
+		var movement = inventoryService.createMovement(new MovementRequest(
+				product.getId(), operator.getId(), null, "Propietario sin cuenta", findArea("Almacén").getId(),
+				MovementType.SALIDA, BigDecimal.ONE, "Entrega especial", null, MovementPurpose.CONSUMPTION,
+				null, null));
+
+		assertEquals("Propietario sin cuenta", movement.recipientName());
+		assertEquals(null, movement.recipientId());
 	}
 
 	private User findUser(String rolePart) {

@@ -14,6 +14,7 @@ import com.plh.condominio.dto.LoanReturnRequest;
 import com.plh.condominio.dto.MovementResponse;
 import com.plh.condominio.dto.QrAssetDetailResponse;
 import com.plh.condominio.entity.AssetStatus;
+import com.plh.condominio.entity.BorrowerType;
 import com.plh.condominio.entity.InventoryAsset;
 import com.plh.condominio.entity.ItemCondition;
 import com.plh.condominio.entity.Loan;
@@ -31,6 +32,7 @@ import com.plh.condominio.repository.AreaRepository;
 import com.plh.condominio.repository.AssetRepository;
 import com.plh.condominio.repository.LoanLineRepository;
 import com.plh.condominio.repository.LoanRepository;
+import com.plh.condominio.repository.InventoryPersonRepository;
 import com.plh.condominio.repository.MovementRepository;
 import com.plh.condominio.repository.ProductRepository;
 import com.plh.condominio.repository.UserRepository;
@@ -58,10 +60,12 @@ public class InventoryOperationsService {
     private final UserRepository userRepository;
     private final MovementRepository movementRepository;
     private final InventoryService inventoryService;
+    private final InventoryPersonRepository inventoryPersonRepository;
 
     public InventoryOperationsService(AreaRepository areaRepository, AssetRepository assetRepository,
             LoanRepository loanRepository, LoanLineRepository loanLineRepository, ProductRepository productRepository,
-            UserRepository userRepository, MovementRepository movementRepository, InventoryService inventoryService) {
+            UserRepository userRepository, MovementRepository movementRepository, InventoryService inventoryService,
+            InventoryPersonRepository inventoryPersonRepository) {
         this.areaRepository = areaRepository;
         this.assetRepository = assetRepository;
         this.loanRepository = loanRepository;
@@ -70,6 +74,7 @@ public class InventoryOperationsService {
         this.userRepository = userRepository;
         this.movementRepository = movementRepository;
         this.inventoryService = inventoryService;
+        this.inventoryPersonRepository = inventoryPersonRepository;
     }
 
     @Transactional(readOnly = true)
@@ -104,7 +109,8 @@ public class InventoryOperationsService {
             throw new IllegalArgumentException("Registra primero la existencia de compra del producto; no puedes etiquetar más unidades que las existentes.");
         }
         StorageArea area = findArea(request.areaId());
-        User responsible = findUser(request.responsibleId());
+        User responsible = request.responsibleId() != null ? findUser(request.responsibleId()) : null;
+        String responsibleName = resolvePersonName(request.responsibleName(), responsible);
         User recorder = currentActor(request.recordedById());
         InventoryAsset asset = InventoryAsset.builder()
                 .product(product)
@@ -112,11 +118,12 @@ public class InventoryOperationsService {
                 .serialNumber(request.serialNumber())
                 .area(area)
                 .responsible(responsible)
+                .responsibleName(responsibleName)
                 .condition(request.condition())
                 .status(AssetStatus.ASSIGNED)
                 .build();
         asset = assetRepository.save(asset);
-        saveAssetMovement(asset, recorder, responsible, area, MovementPurpose.ASSET_ASSIGNMENT,
+        saveAssetMovement(asset, recorder, responsible, responsibleName, area, MovementPurpose.ASSET_ASSIGNMENT,
                 MovementType.SALIDA, request.condition(), request.condition(), "Registro y asignación inicial");
         return toAssetResponse(asset);
     }
@@ -129,15 +136,17 @@ public class InventoryOperationsService {
             throw new IllegalStateException("No se puede asignar un activo prestado o retirado.");
         }
         StorageArea area = findArea(request.areaId());
-        User responsible = findUser(request.responsibleId());
+        User responsible = request.responsibleId() != null ? findUser(request.responsibleId()) : null;
+        String responsibleName = resolvePersonName(request.responsibleName(), responsible);
         User recorder = currentActor(request.issuedById());
         ItemCondition previousCondition = asset.getCondition();
         asset.setArea(area);
         asset.setResponsible(responsible);
+        asset.setResponsibleName(responsibleName);
         asset.setCondition(request.condition());
         asset.setStatus(AssetStatus.ASSIGNED);
         assetRepository.save(asset);
-        saveAssetMovement(asset, recorder, responsible, area, MovementPurpose.ASSET_ASSIGNMENT,
+        saveAssetMovement(asset, recorder, responsible, responsibleName, area, MovementPurpose.ASSET_ASSIGNMENT,
                 MovementType.SALIDA, previousCondition, request.condition(), request.reason());
         return toAssetResponse(asset);
     }
@@ -162,12 +171,30 @@ public class InventoryOperationsService {
         if (request.dueAt() != null && request.dueAt().isBefore(LocalDate.now())) {
             throw new IllegalArgumentException("La fecha límite del préstamo no puede estar en el pasado.");
         }
-        User borrower = findUser(request.borrowerId());
+        BorrowerType borrowerType = request.borrowerType() != null ? request.borrowerType()
+                : request.borrowerId() != null || request.borrowerPersonId() != null ? BorrowerType.EMPLOYEE : null;
+        User borrower = null;
+        String borrowerName;
+        if (borrowerType == BorrowerType.OWNER) {
+            borrowerName = request.borrowerName() != null ? request.borrowerName().trim() : "";
+            if (borrowerName.isBlank()) throw new IllegalArgumentException("Escribe el nombre del propietario que recibe el préstamo.");
+            if (borrowerName.length() > 120) throw new IllegalArgumentException("El nombre no puede superar 120 caracteres.");
+        } else if (borrowerType == BorrowerType.EMPLOYEE && request.borrowerPersonId() != null) {
+            borrowerName = inventoryPersonRepository.findByIdAndActiveTrue(request.borrowerPersonId())
+                    .orElseThrow(() -> new EntityNotFoundException("Trabajador no encontrado o inactivo."))
+                    .getFullName();
+        } else if (borrowerType == BorrowerType.EMPLOYEE && request.borrowerId() != null) {
+            borrower = findUser(request.borrowerId());
+            borrowerName = borrower.getFullName();
+        } else {
+            throw new IllegalArgumentException("Selecciona un trabajador registrado o indica el nombre del propietario.");
+        }
         User issuer = currentActor(request.issuedById());
         StorageArea area = findArea(request.areaId());
         Loan loan = Loan.builder()
                 .loanNumber("PLH-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase())
-                .borrower(borrower).issuedBy(issuer).area(area).purpose(request.purpose().trim())
+                .borrower(borrower).borrowerName(borrowerName).borrowerType(borrowerType)
+                .issuedBy(issuer).area(area).purpose(request.purpose().trim())
                 .issuedAt(LocalDate.now()).dueAt(request.dueAt()).status(LoanStatus.OPEN).build();
         loan = loanRepository.save(loan);
         Set<Long> processedAssetIds = new HashSet<>();
@@ -193,7 +220,7 @@ public class InventoryOperationsService {
                 }
                 product.setStock(product.getStock().subtract(item.quantity()));
                 productRepository.save(product);
-                saveMovement(product, issuer, borrower, area, loan, null, MovementType.SALIDA,
+                saveMovement(product, issuer, borrower, borrowerName, area, loan, null, MovementType.SALIDA,
                         item.quantity(), MovementPurpose.LOAN_ISSUE, loan.getPurpose(), null, item.conditionOut(), null);
             } else {
                 List<Long> ids = item.assetIds() != null ? item.assetIds() : List.of();
@@ -216,10 +243,11 @@ public class InventoryOperationsService {
                     asset.setStatus(AssetStatus.ON_LOAN);
                     asset.setArea(area);
                     asset.setResponsible(borrower);
+                    asset.setResponsibleName(borrowerName);
                     assetRepository.save(asset);
                     line.getAssets().add(LoanAsset.builder().loanLine(line).asset(asset)
                             .conditionOut(conditionOut).build());
-                    saveMovement(product, issuer, borrower, area, loan, asset, MovementType.SALIDA,
+                    saveMovement(product, issuer, borrower, borrowerName, area, loan, asset, MovementType.SALIDA,
                             BigDecimal.ONE, MovementPurpose.LOAN_ISSUE, loan.getPurpose(), null, conditionOut, null);
                 }
             }
@@ -235,7 +263,6 @@ public class InventoryOperationsService {
                 .orElseThrow(() -> new EntityNotFoundException("Préstamo no encontrado: " + id));
         if (loan.getStatus() == LoanStatus.CLOSED) throw new IllegalStateException("El préstamo ya está cerrado.");
         User receivedBy = currentActor(request.receivedById());
-        User returnedBy = findExistingUser(request.returnedById());
         StorageArea area = findArea(request.areaId());
 
         for (LoanReturnItemRequest item : request.items()) {
@@ -261,9 +288,10 @@ public class InventoryOperationsService {
                     asset.setStatus(item.condition() == ItemCondition.OUT_OF_SERVICE ? AssetStatus.RETIRED : AssetStatus.IN_STOCK);
                     asset.setArea(area);
                     asset.setResponsible(null);
+                    asset.setResponsibleName(null);
                     assetRepository.save(asset);
                     line.setReturnedQuantity(line.getReturnedQuantity().add(BigDecimal.ONE));
-                    saveMovement(line.getProduct(), receivedBy, returnedBy, area, loan, asset, MovementType.ENTRADA,
+                    saveMovement(line.getProduct(), receivedBy, null, loan.getBorrowerName(), area, loan, asset, MovementType.ENTRADA,
                             BigDecimal.ONE, MovementPurpose.LOAN_RETURN, "Devolución de " + loan.getLoanNumber(),
                             loanAsset.getConditionOut(), item.condition(), null);
                 }
@@ -278,7 +306,7 @@ public class InventoryOperationsService {
                 product.setStock(product.getStock().add(quantity));
                 productRepository.save(product);
                 line.setReturnedQuantity(line.getReturnedQuantity().add(quantity));
-                saveMovement(product, receivedBy, returnedBy, area, loan, null, MovementType.ENTRADA,
+                saveMovement(product, receivedBy, null, loan.getBorrowerName(), area, loan, null, MovementType.ENTRADA,
                         quantity, MovementPurpose.LOAN_RETURN, "Devolución de " + loan.getLoanNumber(),
                         line.getConditionOut(), item.condition(), null);
             } else {
@@ -293,16 +321,17 @@ public class InventoryOperationsService {
         return toLoanResponse(loanRepository.save(loan));
     }
 
-    private void saveAssetMovement(InventoryAsset asset, User actor, User recipient, StorageArea area,
+    private void saveAssetMovement(InventoryAsset asset, User actor, User recipient, String recipientName, StorageArea area,
             MovementPurpose purpose, MovementType type, ItemCondition before, ItemCondition after, String reason) {
-        saveMovement(asset.getProduct(), actor, recipient, area, null, asset, type, BigDecimal.ONE,
+        saveMovement(asset.getProduct(), actor, recipient, recipientName, area, null, asset, type, BigDecimal.ONE,
                 purpose, reason, before, after, null);
     }
 
-    private void saveMovement(Product product, User actor, User recipient, StorageArea area, Loan loan,
+    private void saveMovement(Product product, User actor, User recipient, String recipientName, StorageArea area, Loan loan,
             InventoryAsset asset, MovementType type, BigDecimal quantity, MovementPurpose purpose,
             String reason, ItemCondition before, ItemCondition after, String vehicleEquipment) {
         Movement movement = movementRepository.save(Movement.builder().product(product).user(actor).receivedBy(recipient)
+                .recipientName(recipientName)
                 .area(area).loan(loan).asset(asset).type(type).quantity(quantity).purpose(purpose)
                 .reason(reason).conditionBefore(before).conditionAfter(after).vehicleEquipment(vehicleEquipment)
                 .movementDate(LocalDate.now()).build());
@@ -312,11 +341,6 @@ public class InventoryOperationsService {
     private User findUser(Long id) {
         return userRepository.findById(id).filter(User::getEnabled)
                 .orElseThrow(() -> new EntityNotFoundException("Usuario no encontrado o desactivado: " + id));
-    }
-
-    private User findExistingUser(Long id) {
-        return userRepository.findById(id)
-                .orElseThrow(() -> new EntityNotFoundException("Usuario no encontrado: " + id));
     }
 
     private User currentActor(Long fallbackUserId) {
@@ -343,7 +367,8 @@ public class InventoryOperationsService {
                 asset.getArea() != null ? asset.getArea().getId() : null,
                 asset.getArea() != null ? asset.getArea().getName() : null,
                 asset.getResponsible() != null ? asset.getResponsible().getId() : null,
-                asset.getResponsible() != null ? asset.getResponsible().getFullName() : null,
+                asset.getResponsibleName() != null ? asset.getResponsibleName()
+                        : asset.getResponsible() != null ? asset.getResponsible().getFullName() : null,
                 asset.getCondition(), asset.getStatus());
     }
 
@@ -356,9 +381,17 @@ public class InventoryOperationsService {
                     line.getProduct().getCode(), line.getQuantity(), line.getReturnedQuantity(), outstanding,
                     line.getConditionOut(), assets);
         }).toList();
-        return new LoanResponse(loan.getId(), loan.getLoanNumber(), loan.getBorrower().getId(),
-                loan.getBorrower().getFullName(), loan.getIssuedBy().getId(), loan.getIssuedBy().getFullName(),
+        return new LoanResponse(loan.getId(), loan.getLoanNumber(),
+                loan.getBorrower() != null ? loan.getBorrower().getId() : null,
+                loan.getBorrowerName(), loan.getBorrowerType(), loan.getIssuedBy().getId(), loan.getIssuedBy().getFullName(),
                 loan.getArea().getId(), loan.getArea().getName(), loan.getPurpose(), loan.getIssuedAt(),
                 loan.getDueAt(), loan.getClosedAt(), loan.getStatus(), lines);
+    }
+
+    private String resolvePersonName(String requestedName, User legacyUser) {
+        String name = requestedName != null ? requestedName.trim() : "";
+        if (!name.isBlank()) return name;
+        if (legacyUser != null) return legacyUser.getFullName();
+        throw new IllegalArgumentException("Selecciona o escribe el nombre de la persona responsable.");
     }
 }

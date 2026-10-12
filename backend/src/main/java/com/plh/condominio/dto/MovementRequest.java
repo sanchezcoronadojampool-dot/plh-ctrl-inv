@@ -14,6 +14,7 @@ public record MovementRequest(
         @NotNull Long productId,
         @NotNull Long userId,
         Long recipientId,
+        String recipientName,
         Long areaId,
         @NotNull MovementType type,
         @NotNull @DecimalMin("0.001") @Digits(integer = 11, fraction = 3) BigDecimal quantity,
@@ -23,4 +24,10 @@ public record MovementRequest(
         @Size(max = 120) String vehicleEquipment,
         ItemCondition condition
 ) {
+    public MovementRequest(Long productId, Long userId, Long recipientId, Long areaId, MovementType type,
+            BigDecimal quantity, String reason, LocalDate movementDate, MovementPurpose purpose,
+            String vehicleEquipment, ItemCondition condition) {
+        this(productId, userId, recipientId, null, areaId, type, quantity, reason, movementDate, purpose,
+                vehicleEquipment, condition);
+    }
 }

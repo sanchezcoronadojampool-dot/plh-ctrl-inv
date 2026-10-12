@@ -46,6 +46,9 @@ public class Movement {
     @JoinColumn(name = "received_by_id")
     private User receivedBy;
 
+    @Column(name = "recipient_name", length = 120)
+    private String recipientName;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "area_id")
     private StorageArea area;

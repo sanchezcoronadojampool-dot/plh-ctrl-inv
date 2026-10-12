@@ -13,6 +13,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
+import com.plh.condominio.entity.BorrowerType;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -39,8 +40,16 @@ public class Loan {
     private String loanNumber;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "borrower_id", nullable = false)
+    @JoinColumn(name = "borrower_id")
     private User borrower;
+
+    @Column(name = "borrower_name", nullable = false, length = 120)
+    private String borrowerName;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "borrower_type", nullable = false, length = 20)
+    @Builder.Default
+    private BorrowerType borrowerType = BorrowerType.EMPLOYEE;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "issued_by_id", nullable = false)

@@ -3,6 +3,7 @@ export interface Product {
   code: string;
   name: string;
   category: string;
+  variant?: string;
   stock: number;
   minimumStock: number;
   location: string;
@@ -95,7 +96,8 @@ export interface LoanLine {
 export interface Loan {
   id: number;
   loanNumber: string;
-  borrowerId: number;
+  borrowerId?: number;
+  borrowerType: 'EMPLOYEE' | 'OWNER';
   borrowerName: string;
   issuedById: number;
   issuedByName: string;

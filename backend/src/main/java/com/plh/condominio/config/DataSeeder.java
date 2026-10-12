@@ -3,6 +3,7 @@ package com.plh.condominio.config;
 import com.plh.condominio.entity.AssetStatus;
 import com.plh.condominio.entity.AccessRole;
 import com.plh.condominio.entity.InventoryAsset;
+import com.plh.condominio.entity.InventoryPerson;
 import com.plh.condominio.entity.ItemCondition;
 import com.plh.condominio.entity.Movement;
 import com.plh.condominio.entity.MovementPurpose;
@@ -13,6 +14,7 @@ import com.plh.condominio.entity.TrackingType;
 import com.plh.condominio.entity.User;
 import com.plh.condominio.repository.AreaRepository;
 import com.plh.condominio.repository.AssetRepository;
+import com.plh.condominio.repository.InventoryPersonRepository;
 import com.plh.condominio.repository.MovementRepository;
 import com.plh.condominio.repository.ProductRepository;
 import com.plh.condominio.repository.UserRepository;
@@ -36,10 +38,12 @@ public class DataSeeder implements CommandLineRunner {
     private final AssetRepository assetRepository;
     private final PasswordEncoder passwordEncoder;
     private final InventoryService inventoryService;
+    private final InventoryPersonRepository inventoryPersonRepository;
 
     public DataSeeder(ProductRepository productRepository, UserRepository userRepository,
             MovementRepository movementRepository, AreaRepository areaRepository, AssetRepository assetRepository,
-            PasswordEncoder passwordEncoder, InventoryService inventoryService) {
+            PasswordEncoder passwordEncoder, InventoryService inventoryService,
+            InventoryPersonRepository inventoryPersonRepository) {
         this.productRepository = productRepository;
         this.userRepository = userRepository;
         this.movementRepository = movementRepository;
@@ -47,11 +51,13 @@ public class DataSeeder implements CommandLineRunner {
         this.assetRepository = assetRepository;
         this.passwordEncoder = passwordEncoder;
         this.inventoryService = inventoryService;
+        this.inventoryPersonRepository = inventoryPersonRepository;
     }
 
     @Override
     public void run(String... args) {
         seedUsers();
+        seedInventoryPeople();
         seedAreas();
         seedInitialProducts();
         normalizeLegacyProductTypes();
@@ -66,6 +72,21 @@ public class DataSeeder implements CommandLineRunner {
         seedTelevisionAssets();
         productRepository.findAll().forEach(product ->
                 inventoryService.recordOpeningBalance(product, "Saldo inicial de datos de demostración"));
+    }
+
+    private void seedInventoryPeople() {
+        for (User user : userRepository.findAllByEnabledTrueOrderByFullNameAsc()) {
+            if (user.getRole() == AccessRole.VIEWER) continue;
+            String jobTitle = user.getJobTitle() == null || user.getJobTitle().isBlank()
+                    ? "Empleado" : user.getJobTitle();
+            if (!inventoryPersonRepository.existsByFullNameIgnoreCaseAndJobTitleIgnoreCaseAndActiveTrue(
+                    user.getFullName(), jobTitle)) {
+                InventoryPerson person = new InventoryPerson();
+                person.setFullName(user.getFullName());
+                person.setJobTitle(jobTitle);
+                inventoryPersonRepository.save(person);
+            }
+        }
     }
 
     private void seedUsers() {
@@ -156,9 +177,11 @@ public class DataSeeder implements CommandLineRunner {
             InventoryAsset asset = assetRepository.save(InventoryAsset.builder().product(televisions)
                     .assetCode("TV-PLH-%03d".formatted(index)).serialNumber("SN-TV-%03d".formatted(index))
                     .area(inCameras ? cameras : administration).responsible(inCameras ? admin : manager)
+                    .responsibleName((inCameras ? admin : manager).getFullName())
                     .condition(ItemCondition.GOOD).status(AssetStatus.ASSIGNED).build());
             movementRepository.save(Movement.builder().product(televisions).user(admin)
-                    .receivedBy(inCameras ? admin : manager).area(inCameras ? cameras : administration)
+                    .receivedBy(inCameras ? admin : manager)
+                    .recipientName((inCameras ? admin : manager).getFullName()).area(inCameras ? cameras : administration)
                     .asset(asset)
                     .type(MovementType.SALIDA).quantity(BigDecimal.ONE)
                     .purpose(MovementPurpose.ASSET_ASSIGNMENT).reason("Registro y asignación inicial")
