@@ -78,6 +78,21 @@ class SecurityIntegrationTests {
     }
 
     @Test
+    void bulkProductImportRequiresAnAdministratorSession() throws Exception {
+        String request = """
+                {"products":[]}
+                """;
+        mockMvc.perform(post("/api/products/bulk").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(request))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/api/products/bulk").with(user("manager").roles("INVENTORY_MANAGER")).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content(request))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/api/products/bulk").with(user("admin").roles("ADMIN")).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content(request))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void stateChangingRequestsRequireCsrfEvenForAdministrators() throws Exception {
         String request = """
                 {"name":"Pruebas de seguridad","description":"Área temporal"}

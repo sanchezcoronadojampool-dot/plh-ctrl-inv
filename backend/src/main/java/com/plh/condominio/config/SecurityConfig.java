@@ -50,6 +50,10 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/auth/csrf").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
+                        // Tomcat reenvía a /error cualquier 4xx aún sin comprometer (JSON malformado,
+                        // ruta inexistente); sin esta regla el denyAll convertía ese reenvío en un 403
+                        // "No tienes permisos" que enmascaraba el código real.
+                        .requestMatchers("/error").permitAll()
                         .requestMatchers("/api/auth/**").authenticated()
                         .requestMatchers("/api/users/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/ledger/**", "/api/products/*/ledger")

@@ -101,6 +101,11 @@
           <label class="search-box"><span aria-hidden="true">⌕</span><input [(ngModel)]="productSearch" (ngModelChange)="page = 1" placeholder="Buscar producto o código" aria-label="Buscar producto" /></label>
           <select [(ngModel)]="categoryFilter" (ngModelChange)="page = 1" aria-label="Filtrar por categoría"><option value="">Todas las categorías</option><option *ngFor="let category of categories" [value]="category">{{ category }}</option></select>
           <span class="toolbar-count">{{ filteredProducts.length }} productos</span>
+          <div class="toolbar-actions">
+            <button class="secondary-btn" type="button" (click)="printProductsReport()">Imprimir / PDF</button>
+            <button class="secondary-btn" type="button" (click)="exportProductsExcel()">Exportar Excel</button>
+            <button *ngIf="isAdministrator" class="primary-btn" type="button" (click)="openImportForm()">Importar Excel</button>
+          </div>
         </div>
         <div class="table-scroll">
           <table class="product-table">
@@ -156,6 +161,68 @@
           <label><span>Ubicación</span><input name="productLocation" [(ngModel)]="productForm.location" required maxlength="80" /></label>
           <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving || (!editingProductId && (productForm.stock! < 1 || productForm.stock! > 50))">{{ saving ? 'Guardando…' : editingProductId ? 'Guardar cambios' : 'Guardar producto' }}</button></div>
         </form>
+        </section>
+      </div>
+
+      <section class="products-print-area" aria-hidden="true">
+        <header class="report-print-header">
+          <img src="assets/logo-playa-la-honda.png" alt="Condominio Playa La Honda" />
+          <div><p class="report-print-kicker">Condominio Playa La Honda</p><h1>Reporte de productos</h1><p>Gestión y control de inventario</p></div>
+          <small>Generado: {{ productsReportGeneratedAt }}</small>
+        </header>
+        <div class="report-print-summary">
+          <span><strong>Categoría:</strong> {{ categoryFilter || 'Todas' }}</span>
+          <span><strong>Búsqueda:</strong> {{ productSearch || '—' }}</span>
+          <span><strong>Registros:</strong> {{ filteredProducts.length }}</span>
+        </div>
+        <table>
+          <thead><tr><th>Código</th><th>Producto</th><th>Categoría</th><th>Tipo</th><th>Stock</th><th>Mínimo</th><th>Unidad</th><th>Ubicación</th><th>Estado</th></tr></thead>
+          <tbody>
+            <tr *ngFor="let product of filteredProducts">
+              <td>{{ product.code }}</td>
+              <td>{{ product.name }}<ng-container *ngIf="product.variant"> · {{ product.variant }}</ng-container></td>
+              <td>{{ product.category }}</td>
+              <td>{{ trackingLabel(product.trackingType) }}</td>
+              <td>{{ product.stock }}</td>
+              <td>{{ product.minimumStock }}</td>
+              <td>{{ product.unit }}</td>
+              <td>{{ product.location }}</td>
+              <td>{{ stockState(product) }}</td>
+            </tr>
+            <tr *ngIf="!filteredProducts.length"><td colspan="9" class="empty-state">No hay productos para los filtros seleccionados.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <div class="modal-backdrop" *ngIf="showImportForm" (click)="showImportForm = false">
+        <section class="detail-modal form-dialog import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-form-title" (click)="$event.stopPropagation()">
+        <button class="modal-close" type="button" (click)="showImportForm = false" aria-label="Cerrar">×</button>
+        <div class="section-heading"><div><h2 id="import-form-title">Carga masiva de productos</h2><p>Sube un archivo .xlsx o .csv con una fila por producto; revisa la vista previa antes de importar</p></div></div>
+        <div class="import-actions">
+          <button class="secondary-btn" type="button" (click)="downloadImportTemplate()">Descargar plantilla</button>
+          <label class="primary-btn file-picker">{{ importFileName ? 'Cambiar archivo' : 'Elegir archivo' }}<input type="file" accept=".xlsx,.xls,.csv" (change)="importFileChanged($event)" aria-label="Archivo de productos" /></label>
+        </div>
+        <p *ngIf="importFileName" class="import-meta">Archivo: <strong>{{ importFileName }}</strong><span *ngIf="importParsing"> · analizando…</span></p>
+        <p *ngIf="importSummary" class="import-meta">{{ importSummary }}</p>
+        <div class="table-scroll" *ngIf="importRows.length">
+          <table class="import-table">
+            <thead><tr><th>Fila</th><th>Código</th><th>Producto</th><th>Categoría</th><th>Stock</th><th>Estado</th></tr></thead>
+            <tbody>
+              <tr *ngFor="let row of importRows" [class.row-error]="row.status === 'error'" [class.row-skip]="row.status === 'skip'">
+                <td>{{ row.row }}</td>
+                <td class="code-cell">{{ row.code || '—' }}</td>
+                <td><strong>{{ row.name || '—' }}</strong><small *ngIf="row.message">{{ row.message }}</small></td>
+                <td>{{ row.category || '—' }}</td>
+                <td>{{ row.stock }} {{ row.unit }}</td>
+                <td><span class="status" [class.incoming]="row.status === 'ready' || row.status === 'created'" [class.outgoing]="row.status === 'skip'" [class.warning-status]="row.status === 'error'">{{ importStatusLabel(row.status) }}</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="form-submit">
+          <button class="primary-btn" type="button" (click)="confirmImportProducts()" [disabled]="saving || importParsing || !importReadyRows.length">{{ saving ? 'Importando…' : 'Importar ' + importReadyRows.length + ' productos' }}</button>
+          <button class="secondary-btn" type="button" (click)="showImportForm = false">Cerrar</button>
+        </div>
         </section>
       </div>
     </ng-container>
@@ -229,48 +296,77 @@
       </div>
       <section class="panel">
         <div class="section-heading"><div><h2>Activos trazables</h2><p>{{ assets.length }} unidades registradas · abrir el detalle para ver custodio e historial</p></div></div>
-        <div class="toolbar"><label class="search-box"><span>⌕</span><input [(ngModel)]="assetSearch" placeholder="Buscar código, producto, área o responsable" aria-label="Buscar activo" /></label><span class="toolbar-count">{{ filteredAssets.length }} activos</span></div>
-        <div class="table-scroll"><table><thead><tr><th>Código / Serie</th><th>Producto</th><th>Estado</th><th>Condición</th><th>Ubicación</th><th>Responsable</th><th>Ficha QR</th><th></th></tr></thead>
+        <div class="toolbar"><label class="search-box"><span>⌕</span><input [(ngModel)]="assetSearch" placeholder="Buscar código, producto, área o responsable" aria-label="Buscar activo" /></label><span class="toolbar-count">{{ filteredAssets.length }} activos</span>
+          <div class="toolbar-actions"><button class="secondary-btn" type="button" [disabled]="!selectedAssetIds.size" (click)="printSelectedQrs()">Imprimir QR ({{ selectedAssetIds.size }})</button></div>
+        </div>
+        <div class="table-scroll"><table><thead><tr><th class="check-cell"><input type="checkbox" [checked]="allFilteredAssetsSelected" (change)="toggleAllFilteredAssets($event)" aria-label="Seleccionar todos los activos visibles" /></th><th>Código / Serie</th><th>Producto</th><th>Estado</th><th>Condición</th><th>Ubicación</th><th>Responsable</th><th>Ficha QR</th><th></th></tr></thead>
           <tbody><tr *ngFor="let asset of filteredAssets">
+            <td class="check-cell"><input type="checkbox" [checked]="selectedAssetIds.has(asset.id)" (change)="toggleAssetSelection(asset.id, $event)" [attr.aria-label]="'Seleccionar ' + asset.assetCode" /></td>
             <td><strong>{{ asset.assetCode }}</strong><br /><small>{{ asset.serialNumber || 'Sin serie' }}</small></td><td>{{ asset.productName }}</td>
             <td><span class="status" [class.incoming]="asset.status === 'ASSIGNED' || asset.status === 'IN_STOCK'" [class.outgoing]="asset.status === 'ON_LOAN'">{{ statusLabel(asset.status) }}</span></td>
             <td>{{ conditionLabel(asset.condition) }}</td><td>{{ asset.areaName || '—' }}</td><td>{{ asset.responsibleName || '—' }}</td>
             <td><button class="secondary-btn" type="button" (click)="showAssetQr(asset)">Ver / imprimir QR</button></td>
             <td><button class="text-button" type="button" (click)="startAssignAsset(asset)" [disabled]="asset.status === 'ON_LOAN' || asset.status === 'RETIRED'">Asignar</button><button class="text-button" type="button" (click)="openAssetDetail(asset)">Historial</button></td>
-          </tr><tr *ngIf="!filteredAssets.length"><td colspan="8" class="empty-state">No hay activos serializados para mostrar.</td></tr></tbody>
+          </tr><tr *ngIf="!filteredAssets.length"><td colspan="9" class="empty-state">No hay activos serializados para mostrar.</td></tr></tbody>
         </table></div>
       </section>
     </ng-container>
 
     <ng-container *ngIf="activeSection === 'loans'">
       <section class="panel">
-        <div class="section-heading"><div><h2>Préstamos y devoluciones</h2><p>Las devoluciones guardan cantidades y condición del artículo recibido</p></div><button class="primary-btn" type="button" (click)="showLoanForm = true">+ Nuevo préstamo</button></div>
+        <div class="section-heading"><div><h2>Préstamos y devoluciones</h2><p>{{ openLoanCount }} préstamo(s) activo(s) · {{ overdueLoanCount }} vencido(s) · elige quién recibe, agrega artículos y confirma</p></div><button class="primary-btn" type="button" (click)="startLoan()">+ Nuevo préstamo</button></div>
       </section>
       <div class="modal-backdrop" *ngIf="showLoanForm" (click)="showLoanForm = false">
         <section class="detail-modal form-dialog" role="dialog" aria-modal="true" aria-labelledby="loan-form-title" (click)="$event.stopPropagation()">
         <button class="modal-close" type="button" (click)="showLoanForm = false" aria-label="Cerrar">×</button>
-        <div class="section-heading"><div><h2 id="loan-form-title">Registrar préstamo</h2><p>Herramientas reutilizables o activos serializados</p></div></div>
-        <form class="form-grid modal-form" (ngSubmit)="issueLoan()">
-          <label><span>Tipo de beneficiario</span><select name="loanBorrowerType" [(ngModel)]="loanForm.borrowerType" required><option value="EMPLOYEE">Trabajador</option><option value="OWNER">Propietario</option></select></label>
-          <label *ngIf="loanForm.borrowerType === 'EMPLOYEE'"><span>Trabajador que recibe</span><select name="loanBorrowerPerson" [(ngModel)]="loanForm.borrowerPersonId" required><option [ngValue]="0" disabled>Selecciona trabajador</option><option *ngFor="let person of users" [ngValue]="person.id">{{ person.fullName }} · {{ person.jobTitle }}</option></select><small *ngIf="!users.length">Registra primero al trabajador en Personal.</small><button *ngIf="canManageInventory" class="text-button" type="button" (click)="showPersonForm = true">+ Agregar trabajador si no existe</button></label>
-          <label *ngIf="loanForm.borrowerType === 'OWNER'"><span>Nombre del propietario</span><input name="loanOwnerName" [(ngModel)]="loanForm.borrowerName" required maxlength="120" /></label>
-          <label><span>Entregado por</span><input [value]="currentUser.fullName" readonly /></label>
+        <div class="section-heading"><div><h2 id="loan-form-title">Registrar préstamo</h2><p>Un solo paso: destinatario, artículos y confirmación</p></div></div>
+        <form class="form-grid modal-form loan-form" (ngSubmit)="issueLoan()">
+          <label class="span-two"><span>¿Quién recibe? (escribe o elige un nombre)</span>
+            <input name="loanRecipient" [(ngModel)]="loanRecipientQuery" list="loan-people-list" autocomplete="off" maxlength="120" placeholder="Trabajador, propietario o invitado" />
+            <datalist id="loan-people-list"><option *ngFor="let person of users" [value]="person.fullName"></option></datalist>
+            <small *ngIf="recipientPreview">{{ recipientPreview }}</small>
+            <small *ngIf="!recipientPreview">Si el nombre está en Personal se registra como trabajador; si no, como propietario.</small>
+            <button *ngIf="canManageInventory" class="text-button" type="button" (click)="showPersonForm = true">+ Registrar trabajador si no existe</button>
+          </label>
           <label><span>Área de uso</span><select name="loanArea" [(ngModel)]="loanForm.areaId" required><option *ngFor="let area of areas" [ngValue]="area.id">{{ area.name }}</option></select></label>
-          <label><span>Producto</span><select name="loanProduct" [(ngModel)]="loanProductId" required><option *ngFor="let product of loanProducts" [ngValue]="product.id">{{ product.code }} · {{ product.name }} ({{ product.trackingType === 'ASSET' ? product.availableStock : product.stock }} disponible)</option></select></label>
-          <label *ngIf="selectedLoanProduct?.trackingType !== 'ASSET'"><span>Cantidad</span><input name="loanQuantity" type="number" min="0.001" step="0.001" [(ngModel)]="loanQuantity" required /></label>
-          <label><span>Fecha límite de devolución (opcional)</span><input name="loanDueAt" type="date" [(ngModel)]="loanForm.dueAt" /></label>
-          <label class="span-two"><span>Propósito</span><input name="loanPurpose" [(ngModel)]="loanForm.purpose" required maxlength="200" placeholder="Mantenimiento de luminaria, poda, trabajo asignado…" /></label>
-          <div class="span-two" *ngIf="selectedLoanProduct?.trackingType === 'ASSET'"><span class="field-label">Unidades disponibles</span>
-            <div class="selection-list"><label *ngFor="let asset of availableLoanAssets"><input type="checkbox" [checked]="loanAssetIds.has(asset.id)" (change)="toggleLoanAsset(asset.id, $event)" />{{ asset.assetCode }} · {{ asset.productName }} · {{ asset.areaName }} · {{ conditionLabel(asset.condition) }}</label><span *ngIf="!availableLoanAssets.length">No hay unidades disponibles.</span></div>
+          <label><span>Entregado por</span><input [value]="currentUser.fullName" readonly /></label>
+          <label><span>Artículo</span><select name="loanProduct" [(ngModel)]="loanProductId" (ngModelChange)="onLoanProductChanged()" required><option *ngFor="let product of loanProducts" [ngValue]="product.id">{{ product.code }} · {{ product.name }} ({{ product.trackingType === 'ASSET' ? product.availableStock : product.stock }} disponible)</option></select></label>
+          <label *ngIf="selectedLoanProduct?.trackingType !== 'ASSET'"><span>Cantidad ({{ selectedLoanProduct?.unit || 'unidades' }})</span><input name="loanQuantity" type="number" min="0.001" step="0.001" [(ngModel)]="loanQuantity" /></label>
+          <div *ngIf="selectedLoanProduct?.trackingType === 'ASSET'" class="loan-add-cell">
+            <span class="field-label">Seleccionadas: {{ loanAssetIds.size }} de {{ availableLoanAssets.length }}</span>
+            <button class="secondary-btn" type="button" (click)="selectAllAvailableLoanAssets()">Seleccionar todas</button>
           </div>
-          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving || !loanProducts.length || !areas.length || (loanForm.borrowerType === 'EMPLOYEE' && !users.length)">Registrar préstamo</button></div>
+          <div class="span-two" *ngIf="selectedLoanProduct?.trackingType === 'ASSET'"><span class="field-label">Unidades disponibles</span>
+            <div class="selection-list"><label *ngFor="let asset of availableLoanAssets"><input type="checkbox" [checked]="loanAssetIds.has(asset.id)" (change)="toggleLoanAsset(asset.id, $event)" />{{ asset.assetCode }} · {{ asset.areaName }} · {{ conditionLabel(asset.condition) }}</label><span *ngIf="!availableLoanAssets.length">No hay unidades disponibles.</span></div>
+          </div>
+          <div class="form-submit span-two loan-add-row">
+            <button class="secondary-btn" type="button" (click)="addLoanLine()" [disabled]="!selectedLoanProduct">Agregar artículo a la lista</button>
+            <p *ngIf="loanLineError" class="login-error" role="alert">{{ loanLineError }}</p>
+          </div>
+          <div class="span-two loan-cart" *ngIf="loanLines.length">
+            <span class="field-label">Artículos del préstamo ({{ loanLines.length }})</span>
+            <ul>
+              <li *ngFor="let line of loanLines; let i = index">
+                <span><strong>{{ loanProductFor(line.productId)?.name }}</strong> · {{ loanProductFor(line.productId)?.code }} · {{ line.assetIds.length ? line.assetIds.length + ' unidad(es)' : line.quantity + ' ' + (loanProductFor(line.productId)?.unit || '') }}</span>
+                <button class="text-button" type="button" (click)="removeLoanLine(i)">Quitar</button>
+              </li>
+            </ul>
+          </div>
+          <label><span>Fecha límite de devolución (opcional)</span><input name="loanDueAt" type="date" [(ngModel)]="loanForm.dueAt" /></label>
+          <label class="span-two"><span>Motivo (opcional)</span><input name="loanPurpose" [(ngModel)]="loanForm.purpose" list="loan-purpose-list" maxlength="200" placeholder="Mantenimiento, poda, trabajo asignado…" /><datalist id="loan-purpose-list"><option *ngFor="let suggestion of loanPurposeSuggestions" [value]="suggestion"></option></datalist></label>
+          <div class="form-submit"><button class="primary-btn" type="submit" [disabled]="saving || !loanLines.length || !resolveLoanRecipient() || !loanForm.areaId">{{ saving ? 'Guardando…' : 'Registrar préstamo (' + loanLines.length + ')' }}</button></div>
         </form>
         </section>
       </div>
       <section class="panel">
         <div class="section-heading"><div><h2>Historial y pendientes</h2><p>Control de salida, devolución parcial, responsable y condición</p></div></div>
         <div class="loan-list"><article class="loan-card" *ngFor="let loan of loans">
-          <div class="loan-heading"><div><strong>{{ loan.loanNumber }}</strong><span>{{ loan.borrowerName }} · {{ loan.purpose }}</span></div><span class="status" [class.incoming]="loan.status === 'CLOSED'" [class.outgoing]="loan.status !== 'CLOSED'">{{ loan.status === 'CLOSED' ? 'Cerrado' : loan.status === 'PARTIALLY_RETURNED' ? 'Devolución parcial' : 'Pendiente' }}</span></div>
+          <div class="loan-heading"><div><strong>{{ loan.loanNumber }}</strong><span>{{ loan.borrowerName }} · {{ loan.purpose }}</span></div>
+            <div class="loan-heading-actions">
+              <span *ngIf="isLoanOverdue(loan)" class="status overdue-status">Vencido</span>
+              <span class="status" [class.incoming]="loan.status === 'CLOSED'" [class.outgoing]="loan.status !== 'CLOSED'">{{ loan.status === 'CLOSED' ? 'Cerrado' : loan.status === 'PARTIALLY_RETURNED' ? 'Devolución parcial' : 'Pendiente' }}</span>
+              <button *ngIf="hasPendingLines(loan)" class="primary-btn compact-btn" type="button" (click)="startReturnAll(loan)">Devolver todo</button>
+            </div></div>
           <div class="loan-line" *ngFor="let line of loan.items"><div><strong>{{ line.productName }}</strong><span>{{ line.outstandingQuantity }} pendiente(s) de {{ line.quantity }} · Condición de salida: {{ conditionLabel(line.conditionOut) }}</span>
             <small *ngFor="let asset of line.assets">{{ asset.assetCode }} · {{ statusLabel(asset.status) }} · {{ conditionLabel(asset.condition) }}</small></div>
             <button *ngIf="line.outstandingQuantity > 0" class="secondary-btn" type="button" (click)="startReturn(loan, line)">Registrar devolución</button>
@@ -338,7 +434,7 @@
           <label><span>Hasta</span><input type="date" [(ngModel)]="reportEnd" /></label>
           <label><span>Categoría</span><select [(ngModel)]="reportCategory"><option value="">Todas las categorías</option><option *ngFor="let category of categories" [value]="category">{{ category }}</option></select></label>
           <button class="secondary-btn" type="button" (click)="resetReportFilters()">Limpiar filtros</button>
-          <div class="export-actions"><button class="secondary-btn" type="button" (click)="printReport()">Imprimir / PDF</button><button class="primary-btn" type="button" (click)="downloadExcel()">Exportar Excel (.csv)</button></div>
+          <div class="export-actions"><button class="secondary-btn" type="button" (click)="printReport()">Imprimir / PDF</button><button class="primary-btn" type="button" (click)="downloadExcel()">Exportar Excel (.xlsx)</button></div>
         </div>
       </section>
       <section class="panel report-print-area">
@@ -427,17 +523,53 @@
     </section>
   </div>
 
+  <div class="modal-backdrop" *ngIf="showReturnAll && returnAllLoan" (click)="showReturnAll = false">
+    <section class="detail-modal form-dialog" role="dialog" aria-modal="true" aria-labelledby="return-all-title" (click)="$event.stopPropagation()">
+      <button class="modal-close" type="button" (click)="showReturnAll = false" aria-label="Cerrar">×</button>
+      <p class="eyebrow">Devolución completa · {{ returnAllLoan.loanNumber }}</p>
+      <h2 id="return-all-title">{{ returnAllLoan.borrowerName }}</h2>
+      <form class="form-grid modal-form" (ngSubmit)="saveReturnAll()">
+        <label><span>Recibido por</span><input [value]="currentUser.fullName" readonly /></label>
+        <label><span>Devuelto por</span><input [value]="returnAllLoan.borrowerName" readonly /></label>
+        <label><span>Condición al regresar</span><select name="returnAllCondition" [(ngModel)]="returnAllCondition" required><option *ngFor="let condition of conditions" [ngValue]="condition">{{ conditionLabel(condition) }}</option></select></label>
+        <label><span>Área de retorno</span><select name="returnAllArea" [(ngModel)]="returnAllAreaId" required><option *ngFor="let area of areas" [ngValue]="area.id">{{ area.name }}</option></select></label>
+        <div class="span-two">
+          <span class="field-label">Artículos que regresan ({{ returnAllPendingLines.length }})</span>
+          <ul class="return-summary">
+            <li *ngFor="let line of returnAllPendingLines">
+              <span><strong>{{ line.productName }}</strong> · {{ line.assets.length ? line.assets.filter(asset => asset.status === 'ON_LOAN').length + ' unidad(es)' : line.outstandingQuantity + ' pendiente(s)' }}</span>
+            </li>
+          </ul>
+        </div>
+        <div class="form-submit span-two"><button class="primary-btn" type="submit" [disabled]="saving || !returnAllPendingLines.length">{{ saving ? 'Registrando…' : 'Registrar devolución completa' }}</button></div>
+      </form>
+    </section>
+  </div>
+
   <div class="modal-backdrop" *ngIf="selectedQrDetail" (click)="closeAssetDetail()">
     <section class="detail-modal qr-detail-modal" role="dialog" aria-modal="true" aria-labelledby="qr-detail-title" (click)="$event.stopPropagation()">
       <button class="modal-close" type="button" (click)="closeAssetDetail()" aria-label="Cerrar">×</button>
       <p class="eyebrow">Ficha QR · {{ selectedQrDetail.asset.assetCode }}</p><h2 id="qr-detail-title">{{ selectedQrDetail.asset.productName }}</h2>
       <dl class="detail-grid"><dt>Serie</dt><dd>{{ selectedQrDetail.asset.serialNumber || '—' }}</dd><dt>Estado</dt><dd>{{ statusLabel(selectedQrDetail.asset.status) }}</dd><dt>Condición</dt><dd>{{ conditionLabel(selectedQrDetail.asset.condition) }}</dd><dt>Responsable</dt><dd>{{ selectedQrDetail.asset.responsibleName || 'Sin responsable' }}</dd><dt>Área</dt><dd>{{ selectedQrDetail.asset.areaName || 'Sin ubicación' }}</dd></dl>
+      <button *ngIf="selectedQrDetail.asset.status === 'ON_LOAN'" class="primary-btn qr-return-btn" type="button" (click)="returnAssetFromQr()">Registrar devolución de este activo</button>
       <h3>Historial de custodia y condición</h3>
       <div class="table-scroll"><table><thead><tr><th>Fecha</th><th>Movimiento</th><th>Responsable / recibe</th><th>Área</th><th>Condición</th><th>Motivo</th></tr></thead><tbody>
         <tr *ngFor="let movement of selectedQrDetail.history"><td>{{ movement.movementDate | date:'dd/MM/yyyy' }}</td><td>{{ movement.purpose }}</td><td>{{ movement.userName }} / {{ movement.recipientName || '—' }}</td><td>{{ movement.areaName || '—' }}</td><td>{{ movement.conditionBefore || '—' }} → {{ movement.conditionAfter || '—' }}</td><td>{{ movement.reason || '—' }}</td></tr>
         <tr *ngIf="!selectedQrDetail.history.length"><td colspan="6" class="empty-state">Sin movimientos asociados.</td></tr>
       </tbody></table></div>
     </section>
+  </div>
+
+  <div class="qr-print-sheet" aria-hidden="true">
+    <div class="qr-print-grid">
+      <div class="qr-print-label" *ngFor="let label of qrPrintLabels">
+        <img [src]="label.dataUrl" alt="" />
+        <strong>{{ label.asset.assetCode }}</strong>
+        <span>{{ label.asset.productName }}</span>
+        <small *ngIf="label.asset.serialNumber">Serie: {{ label.asset.serialNumber }}</small>
+        <small>{{ label.asset.areaName || 'Sin ubicación' }}</small>
+      </div>
+    </div>
   </div>
 </main>
 

@@ -5,6 +5,9 @@ import com.plh.condominio.dto.AreaResponse;
 import com.plh.condominio.dto.AssetAssignRequest;
 import com.plh.condominio.dto.AssetRequest;
 import com.plh.condominio.dto.AssetResponse;
+import com.plh.condominio.dto.BulkProductRowResponse;
+import com.plh.condominio.dto.ProductRequest;
+import com.plh.condominio.dto.ProductResponse;
 import com.plh.condominio.dto.LoanItemRequest;
 import com.plh.condominio.dto.LoanLineResponse;
 import com.plh.condominio.dto.LoanRequest;
@@ -43,8 +46,10 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -191,10 +196,12 @@ public class InventoryOperationsService {
         }
         User issuer = currentActor(request.issuedById());
         StorageArea area = findArea(request.areaId());
+        String purpose = request.purpose() != null && !request.purpose().isBlank()
+                ? request.purpose().trim() : "Préstamo de almacén";
         Loan loan = Loan.builder()
                 .loanNumber("PLH-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase())
                 .borrower(borrower).borrowerName(borrowerName).borrowerType(borrowerType)
-                .issuedBy(issuer).area(area).purpose(request.purpose().trim())
+                .issuedBy(issuer).area(area).purpose(purpose)
                 .issuedAt(LocalDate.now()).dueAt(request.dueAt()).status(LoanStatus.OPEN).build();
         loan = loanRepository.save(loan);
         Set<Long> processedAssetIds = new HashSet<>();
@@ -253,6 +260,70 @@ public class InventoryOperationsService {
             }
         }
         return toLoanResponse(loanRepository.save(loan));
+    }
+
+    /**
+     * Importa productos en bloque. Cada fila se crea en su propia transacción para que
+     * un error puntual no invalida el resto del archivo: la fila fallida queda reportada
+     * con estado ERROR/SKIPPED y las demás se consolidan normalmente.
+     */
+    public List<BulkProductRowResponse> createProductsBulk(List<ProductRequest> requests) {
+        if (requests == null || requests.isEmpty()) {
+            throw new IllegalArgumentException("El archivo no contiene productos para importar.");
+        }
+        if (requests.size() > 500) {
+            throw new IllegalArgumentException("Se pueden importar hasta 500 productos por archivo.");
+        }
+        List<BulkProductRowResponse> results = new ArrayList<>(requests.size());
+        Set<String> seenCodes = new HashSet<>();
+        for (int index = 0; index < requests.size(); index++) {
+            results.add(importProductRow(index + 1, requests.get(index), seenCodes));
+        }
+        return results;
+    }
+
+    private BulkProductRowResponse importProductRow(int row, ProductRequest request, Set<String> seenCodes) {
+        String code = request.code() != null ? request.code().trim() : "";
+        String name = request.name() != null ? request.name().trim() : "";
+        try {
+            if (name.isBlank()) return bulkRow(row, code, name, BulkProductRowResponse.STATUS_ERROR,
+                    "Falta el nombre del producto.");
+            if (request.category() == null || request.category().isBlank())
+                return bulkRow(row, code, name, BulkProductRowResponse.STATUS_ERROR, "Falta la categoría del producto.");
+            if (code.isBlank()) return bulkRow(row, code, name, BulkProductRowResponse.STATUS_ERROR,
+                    "Falta el código del producto.");
+            if (request.unit() == null || request.unit().isBlank())
+                return bulkRow(row, code, name, BulkProductRowResponse.STATUS_ERROR, "Falta la unidad de medida.");
+            if (request.location() == null || request.location().isBlank())
+                return bulkRow(row, code, name, BulkProductRowResponse.STATUS_ERROR, "Falta la ubicación.");
+            if (request.stock() == null || request.stock().signum() < 0)
+                return bulkRow(row, code, name, BulkProductRowResponse.STATUS_ERROR,
+                        "El stock debe ser un número mayor o igual a cero.");
+            if (request.minimumStock() == null || request.minimumStock().signum() < 0)
+                return bulkRow(row, code, name, BulkProductRowResponse.STATUS_ERROR,
+                        "El stock mínimo debe ser un número mayor o igual a cero.");
+            if (!seenCodes.add(code.toUpperCase(Locale.ROOT)))
+                return bulkRow(row, code, name, BulkProductRowResponse.STATUS_SKIPPED,
+                        "El código se repite dentro del archivo; se omite la fila.");
+            if (productRepository.findByCode(code).isPresent())
+                return bulkRow(row, code, name, BulkProductRowResponse.STATUS_SKIPPED,
+                        "Ya existe un producto con ese código; se omite la fila.");
+            ProductResponse created = inventoryService.createProduct(request);
+            return bulkRow(row, created.code(), created.name(), BulkProductRowResponse.STATUS_CREATED,
+                    "Producto creado.");
+        } catch (IllegalArgumentException | IllegalStateException ex) {
+            return bulkRow(row, code, name, BulkProductRowResponse.STATUS_ERROR, ex.getMessage());
+        } catch (DataIntegrityViolationException ex) {
+            return bulkRow(row, code, name, BulkProductRowResponse.STATUS_ERROR,
+                    "El producto rompe una regla de integridad de datos; revisa código y nombre.");
+        } catch (RuntimeException ex) {
+            return bulkRow(row, code, name, BulkProductRowResponse.STATUS_ERROR,
+                    "No se pudo guardar la fila. Verifica los datos e inténtalo de nuevo.");
+        }
+    }
+
+    private static BulkProductRowResponse bulkRow(int row, String code, String name, String status, String message) {
+        return new BulkProductRowResponse(row, code, name, status, message);
     }
 
     @Transactional

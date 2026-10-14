@@ -3,12 +3,19 @@ import { ChangeDetectorRef, Component, HostListener, OnInit } from '@angular/cor
 import { FormsModule } from '@angular/forms';
 import { Observable, TimeoutError, catchError, finalize, forkJoin, of, timeout } from 'rxjs';
 import QRCode from 'qrcode';
-import { Area, Asset, DashboardSummary, InventoryPerson, ItemCondition, Loan, LoanLine, Movement, Product, QrAssetDetail, TrackingType, User } from './models';
+import { Area, Asset, DashboardSummary, ImportPreviewRow, InventoryPerson, ItemCondition, Loan, LoanLine, LoanLineDraft, Movement, Product, QrAssetDetail, QrPrintLabel, TrackingType, User } from './models';
 import { InventoryService } from './inventory.service';
 
 type Section = 'dashboard' | 'products' | 'movements' | 'assets' | 'loans' | 'people' | 'users' | 'reports';
 type ProductSortKey = 'code' | 'name' | 'category' | 'stock';
 const CONDITIONS: ItemCondition[] = ['NEW', 'GOOD', 'FAIR', 'DAMAGED', 'OUT_OF_SERVICE'];
+const GALLON_UNITS = ['galón', 'galones', 'gal', 'gallon', 'gallons'];
+
+interface LoanRecipient {
+  borrowerType: 'EMPLOYEE' | 'OWNER';
+  borrowerPersonId: number | null;
+  borrowerName: string | null;
+}
 
 @Component({
   selector: 'app-root',
@@ -18,7 +25,7 @@ const CONDITIONS: ItemCondition[] = ['NEW', 'GOOD', 'FAIR', 'DAMAGED', 'OUT_OF_S
 })
 export class App implements OnInit {
   readonly Math = Math;
-  private readonly basePath = new URL('.', document.baseURI).pathname;
+  private readonly basePath = App.resolveBasePath();
   private loginAttempted = false;
   activeSection: Section = 'dashboard';
   products: Product[] = [];
@@ -57,10 +64,16 @@ export class App implements OnInit {
   selectedAsset: Asset | null = null;
   assetToAssign: Asset | null = null;
   selectedAssetQr = '';
+  selectedAssetIds = new Set<number>();
+  qrPrintLabels: QrPrintLabel[] = [];
   selectedQrDetail: QrAssetDetail | null = null;
   selectedLoan: Loan | null = null;
   assetSearch = '';
   loanProductId = 0;
+  loanRecipientQuery = '';
+  loanLines: LoanLineDraft[] = [];
+  loanLineError = '';
+  readonly loanPurposeSuggestions = ['Mantenimiento', 'Poda y jardín', 'Limpieza', 'Obra / reparación', 'Evento'];
   movementRecipientPersonId = 0;
   productInitialNumber = 1;
   loanQuantity = 1;
@@ -72,6 +85,16 @@ export class App implements OnInit {
   showProductForm = false;
   showMovementForm = false;
   quickMovementMode = false;
+  showImportForm = false;
+  importParsing = false;
+  importFileName = '';
+  importSummary = '';
+  importRows: ImportPreviewRow[] = [];
+  showReturnAll = false;
+  returnAllLoan: Loan | null = null;
+  returnAllCondition: ItemCondition = 'GOOD';
+  returnAllAreaId = 0;
+  productsReportGeneratedAt = '';
   showUserForm = false;
   showPersonForm = false;
   showAreaForm = false;
@@ -101,6 +124,25 @@ export class App implements OnInit {
     private readonly inventoryService: InventoryService,
     private readonly changeDetector: ChangeDetectorRef
   ) {}
+
+  /**
+   * Raíz de la app. Si el documento se cargó directo en /qr/<token> (escaneo del código),
+   * el directorio de baseURI sería /qr/ y todas las rutas profundas dejarían de coincidir;
+   * por eso se descarta ese segmento y se prefiere la etiqueta <base> cuando existe.
+   */
+  private static resolveBasePath(): string {
+    let path: string;
+    const baseHref = document.querySelector('base')?.getAttribute('href');
+    try {
+      path = baseHref
+        ? new URL(baseHref, document.baseURI).pathname
+        : new URL('.', document.baseURI).pathname;
+    } catch {
+      path = '/';
+    }
+    if (path.endsWith('/qr/')) path = path.slice(0, -4);
+    return path.endsWith('/') ? path : `${path}/`;
+  }
 
   ngOnInit(): void {
     this.inventoryService.getCurrentUser()
@@ -158,6 +200,9 @@ export class App implements OnInit {
           this.loginPassword = '';
           this.changeDetector.markForCheck();
           this.loadAll();
+          // Al escanear un QR sin sesión, la ruta /qr/<token> sigue en la URL:
+          // al terminar el login se carga la ficha del activo en lugar de quedar en blanco.
+          this.syncQrRoute();
         },
         error: (error: unknown) => {
           this.loginError = this.errorText(error, 'Correo o contraseña inválidos.');
@@ -197,7 +242,9 @@ export class App implements OnInit {
 
   @HostListener('window:afterprint')
   clearPrintMode(): void {
-    document.body.classList.remove('printing-report', 'printing-qr');
+    if (document.body.classList.contains('printing-qr')) this.qrPrintLabels = [];
+    document.body.classList.remove('printing-report', 'printing-qr', 'printing-products');
+    this.changeDetector.markForCheck();
   }
 
   get sectionTitle(): string {
@@ -363,7 +410,7 @@ export class App implements OnInit {
           this.loanForm.issuedById = this.currentUser.id;
           this.returnForm.receivedById = this.currentUser.id;
         }
-        if (!this.loanForm.borrowerPersonId && people.length) this.loanForm.borrowerPersonId = people[0].id;
+        if (!this.showLoanForm && !this.loanForm.borrowerPersonId && people.length) this.loanForm.borrowerPersonId = people[0].id;
         if (!this.assetForm.responsiblePersonId && people.length) this.assetForm.responsiblePersonId = people[0].id;
         if (!this.assetForm.areaId && areas.length) this.assetForm.areaId = areas[0].id;
         if (!this.loanForm.areaId && areas.length) this.loanForm.areaId = areas[0].id;
@@ -632,40 +679,165 @@ export class App implements OnInit {
     else this.loanAssetIds.delete(id);
   }
 
-  issueLoan(): void {
+  startLoan(): void {
+    this.loanRecipientQuery = '';
+    this.loanLines = [];
+    this.loanLineError = '';
+    this.loanForm.borrowerType = 'EMPLOYEE';
+    this.loanForm.borrowerPersonId = 0;
+    this.loanForm.borrowerName = '';
+    this.loanForm.purpose = '';
+    this.loanForm.dueAt = '';
+    this.loanQuantity = 1;
+    this.loanAssetIds.clear();
+    if (!this.loanForm.areaId && this.areas.length) this.loanForm.areaId = this.areas[0].id;
+    if (!this.loanProductId && this.loanProducts.length) this.loanProductId = this.loanProducts[0].id!;
+    this.showLoanForm = true;
+  }
+
+  resolveLoanRecipient(): LoanRecipient | null {
+    const query = this.loanRecipientQuery.trim();
+    if (query) {
+      const normalized = this.normalizePersonName(query);
+      const person = this.users.find((candidate) => this.normalizePersonName(candidate.fullName) === normalized);
+      if (person) return { borrowerType: 'EMPLOYEE', borrowerPersonId: person.id, borrowerName: null };
+      return { borrowerType: 'OWNER', borrowerPersonId: null, borrowerName: query };
+    }
+    if (this.loanForm.borrowerType === 'EMPLOYEE' && this.loanForm.borrowerPersonId) {
+      return { borrowerType: 'EMPLOYEE', borrowerPersonId: this.loanForm.borrowerPersonId, borrowerName: null };
+    }
+    if (this.loanForm.borrowerType === 'OWNER' && this.loanForm.borrowerName.trim()) {
+      return { borrowerType: 'OWNER', borrowerPersonId: null, borrowerName: this.loanForm.borrowerName.trim() };
+    }
+    return null;
+  }
+
+  get recipientPreview(): string {
+    const recipient = this.resolveLoanRecipient();
+    if (!recipient) return '';
+    if (recipient.borrowerType === 'EMPLOYEE') {
+      const person = this.users.find((candidate) => candidate.id === recipient.borrowerPersonId);
+      return `Se registra como trabajador: ${person?.fullName ?? ''} · ${person?.jobTitle ?? ''}`;
+    }
+    return `Se registra como propietario o invitado: ${recipient.borrowerName}`;
+  }
+
+  private normalizePersonName(value: string): string {
+    return value.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').toLocaleUpperCase();
+  }
+
+  loanProductFor(productId: number): Product | undefined {
+    return this.products.find((product) => product.id === productId);
+  }
+
+  onLoanProductChanged(): void {
+    this.loanAssetIds.clear();
+    this.loanQuantity = 1;
+    this.loanLineError = '';
+    if (this.selectedLoanProduct?.trackingType === 'ASSET' && this.availableLoanAssets.length === 1) {
+      this.loanAssetIds.add(this.availableLoanAssets[0].id);
+    }
+  }
+
+  selectAllAvailableLoanAssets(): void {
+    for (const asset of this.availableLoanAssets) this.loanAssetIds.add(asset.id);
+  }
+
+  addLoanLine(): void {
     const product = this.selectedLoanProduct;
-    const serialized = product?.trackingType === 'ASSET';
-    const quantity = serialized ? this.loanAssetIds.size : Number(this.loanQuantity);
-    const employeeSelected = this.loanForm.borrowerType === 'EMPLOYEE' && !!this.loanForm.borrowerPersonId;
-    const ownerName = this.loanForm.borrowerName.trim();
-    if (!product || quantity <= 0 || (!employeeSelected && !(this.loanForm.borrowerType === 'OWNER' && ownerName))
-        || !this.loanForm.issuedById || !this.loanForm.areaId || !this.loanForm.purpose.trim()) return;
+    if (!product || !product.id) {
+      this.loanLineError = 'Selecciona un artículo para agregarlo a la lista.';
+      return;
+    }
+    if (this.loanLines.some((line) => line.productId === product.id)) {
+      this.loanLineError = `${product.name} ya está en la lista; elimínalo para cambiar la cantidad.`;
+      return;
+    }
+    const serialized = product.trackingType === 'ASSET';
+    const assetIds = serialized ? [...this.loanAssetIds] : [];
+    const quantity = serialized ? assetIds.length : Number(this.loanQuantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      this.loanLineError = serialized
+        ? 'Selecciona al menos una unidad disponible.'
+        : 'Indica una cantidad mayor que cero.';
+      return;
+    }
+    if (!serialized && quantity > product.stock) {
+      this.loanLineError = `Solo hay ${product.stock} ${product.unit} disponibles de ${product.name}.`;
+      return;
+    }
+    this.loanLines.push({ productId: product.id, quantity, assetIds });
+    this.loanLineError = '';
+    this.loanQuantity = 1;
+    this.loanAssetIds.clear();
+    const next = this.loanProducts.find((candidate) => !this.loanLines.some((line) => line.productId === candidate.id));
+    this.loanProductId = next?.id ?? product.id;
+  }
+
+  removeLoanLine(index: number): void {
+    this.loanLines.splice(index, 1);
+    this.loanLineError = '';
+  }
+
+  issueLoan(): void {
+    const recipient = this.resolveLoanRecipient();
+    const items = this.buildLoanItems();
+    if (!recipient || !items.length || !this.loanForm.issuedById || !this.loanForm.areaId) return;
     this.runMutation(this.inventoryService.createLoan({
       ...this.loanForm,
-      borrowerPersonId: employeeSelected ? this.loanForm.borrowerPersonId : null,
-      borrowerName: this.loanForm.borrowerType === 'OWNER' ? ownerName : null,
+      borrowerType: recipient.borrowerType,
+      borrowerPersonId: recipient.borrowerPersonId,
+      borrowerName: recipient.borrowerName,
       dueAt: this.loanForm.dueAt || null,
-      items: [{ productId: product.id, quantity, conditionOut: 'GOOD', assetIds: serialized ? [...this.loanAssetIds] : [] }]
-    }), 'Préstamo registrado.', () => {
-      this.showLoanForm = false;
-      this.loanQuantity = 1;
-      this.loanAssetIds.clear();
-      this.loanForm.purpose = '';
-      this.loanForm.dueAt = '';
-      this.loanForm.borrowerName = '';
-    });
+      items
+    }), 'Préstamo registrado.', () => this.resetLoanDraft());
+  }
+
+  private buildLoanItems(): Array<{ productId?: number; quantity: number; conditionOut: ItemCondition; assetIds: number[] }> {
+    if (this.loanLines.length) {
+      return this.loanLines.map((line) => ({
+        productId: line.productId,
+        quantity: line.quantity,
+        conditionOut: 'GOOD' as ItemCondition,
+        assetIds: [...line.assetIds]
+      }));
+    }
+    // Compatibilidad con el flujo de un solo producto.
+    const product = this.selectedLoanProduct;
+    if (!product || !this.loanProductId) return [];
+    const serialized = product.trackingType === 'ASSET';
+    const quantity = serialized ? this.loanAssetIds.size : Number(this.loanQuantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) return [];
+    return [{ productId: product.id, quantity, conditionOut: 'GOOD' as ItemCondition, assetIds: serialized ? [...this.loanAssetIds] : [] }];
+  }
+
+  private resetLoanDraft(): void {
+    this.showLoanForm = false;
+    this.loanRecipientQuery = '';
+    this.loanLines = [];
+    this.loanLineError = '';
+    this.loanQuantity = 1;
+    this.loanAssetIds.clear();
+    this.loanForm.borrowerType = 'EMPLOYEE';
+    this.loanForm.borrowerPersonId = 0;
+    this.loanForm.borrowerName = '';
+    this.loanForm.purpose = '';
+    this.loanForm.dueAt = '';
   }
 
   startReturn(loan: Loan, line: LoanLine): void {
     this.selectedLoan = loan;
     this.returnLine = line;
-    this.returnQuantity = Math.min(1, line.outstandingQuantity);
-    this.returnAssetIds.clear();
+    const serialized = line.assets.length > 0;
+    this.returnQuantity = line.outstandingQuantity;
+    this.returnAssetIds = new Set(serialized
+      ? line.assets.filter((asset) => asset.status === 'ON_LOAN').map((asset) => asset.id)
+      : []);
     this.returnCondition = 'GOOD';
     this.returnForm = {
       receivedById: this.currentUser?.id ?? 0,
       returnedById: loan.borrowerId ?? 0,
-      areaId: this.areas[0]?.id ?? loan.areaId
+      areaId: loan.areaId || this.areas[0]?.id || 0
     };
   }
 
@@ -690,17 +862,109 @@ export class App implements OnInit {
     });
   }
 
+  hasPendingLines(loan: Loan): boolean {
+    return loan.items.some((line) => line.outstandingQuantity > 0);
+  }
+
+  isLoanOverdue(loan: Loan): boolean {
+    if (loan.status === 'CLOSED' || !loan.dueAt) return false;
+    return loan.dueAt < this.today();
+  }
+
+  get openLoanCount(): number {
+    return this.loans.filter((loan) => loan.status !== 'CLOSED').length;
+  }
+
+  get overdueLoanCount(): number {
+    return this.loans.filter((loan) => this.isLoanOverdue(loan)).length;
+  }
+
+  startReturnAll(loan: Loan): void {
+    this.returnAllLoan = loan;
+    this.returnAllCondition = 'GOOD';
+    this.returnAllAreaId = loan.areaId || this.areas[0]?.id || 0;
+    this.showReturnAll = true;
+  }
+
+  get returnAllPendingLines(): LoanLine[] {
+    return this.returnAllLoan?.items.filter((line) => line.outstandingQuantity > 0) ?? [];
+  }
+
+  saveReturnAll(): void {
+    const loan = this.returnAllLoan;
+    if (!loan || !this.returnAllAreaId) return;
+    const items = loan.items
+      .filter((line) => line.outstandingQuantity > 0)
+      .map((line) => {
+        const serialized = line.assets.length > 0;
+        const outstandingAssets = line.assets.filter((asset) => asset.status === 'ON_LOAN');
+        return {
+          loanLineId: line.id,
+          quantity: serialized ? outstandingAssets.length : line.outstandingQuantity,
+          condition: this.returnAllCondition,
+          assetIds: serialized ? outstandingAssets.map((asset) => asset.id) : []
+        };
+      })
+      .filter((item) => item.quantity > 0);
+    if (!items.length) return;
+    this.runMutation(this.inventoryService.returnLoan(loan.id, {
+      receivedById: this.currentUser?.id ?? 0,
+      returnedById: loan.borrowerId ?? null,
+      areaId: this.returnAllAreaId,
+      items
+    }), 'Devolución completa registrada. El préstamo quedó cerrado.', () => {
+      this.showReturnAll = false;
+      this.returnAllLoan = null;
+    });
+  }
+
+  returnAssetFromQr(): void {
+    const asset = this.selectedQrDetail?.asset;
+    if (!asset) return;
+    const loan = this.loans.find((candidate) => candidate.status !== 'CLOSED'
+      && candidate.items.some((line) => line.outstandingQuantity > 0
+        && line.assets.some((item) => item.id === asset.id && item.status === 'ON_LOAN')));
+    const line = loan?.items.find((candidate) => candidate.assets.some(
+      (item) => item.id === asset.id && item.status === 'ON_LOAN'));
+    if (!loan || !line) {
+      this.errorMessage = 'Este activo no tiene un préstamo pendiente abierto.';
+      this.showErrorModal = true;
+      this.changeDetector.markForCheck();
+      return;
+    }
+    this.closeAssetDetail();
+    this.activeSection = 'loans';
+    this.startReturn(loan, line);
+    this.returnAssetIds = new Set([asset.id]);
+  }
+
   async showAssetQr(asset: Asset): Promise<void> {
     this.selectedAsset = asset;
-    const url = `${window.location.origin}${this.basePath}qr/${asset.qrToken}`;
     try {
-      this.selectedAssetQr = await QRCode.toDataURL(url, { width: 240, margin: 1, errorCorrectionLevel: 'M' });
+      this.selectedAssetQr = await QRCode.toDataURL(this.qrUrl(asset), { width: 240, margin: 1, errorCorrectionLevel: 'M' });
       this.changeDetector.markForCheck();
     } catch {
       this.errorMessage = 'No se pudo generar el QR localmente.';
       this.showErrorModal = true;
       this.changeDetector.markForCheck();
     }
+  }
+
+  toggleAssetSelection(id: number, event: Event): void {
+    if ((event.target as HTMLInputElement).checked) this.selectedAssetIds.add(id);
+    else this.selectedAssetIds.delete(id);
+  }
+
+  toggleAllFilteredAssets(event: Event): void {
+    const checked = (event.target as HTMLInputElement).checked;
+    for (const asset of this.filteredAssets) {
+      if (checked) this.selectedAssetIds.add(asset.id);
+      else this.selectedAssetIds.delete(asset.id);
+    }
+  }
+
+  get allFilteredAssetsSelected(): boolean {
+    return this.filteredAssets.length > 0 && this.filteredAssets.every((asset) => this.selectedAssetIds.has(asset.id));
   }
 
   dismissErrorModal(): void {
@@ -726,10 +990,42 @@ export class App implements OnInit {
     if (this.relativePath.startsWith('/qr/')) window.history.pushState({}, '', this.basePath);
   }
 
-  printQr(): void {
-    document.body.classList.remove('printing-report');
-    document.body.classList.add('printing-qr');
-    window.print();
+  async printQr(): Promise<void> {
+    if (this.selectedAsset) await this.printQrSheet([this.selectedAsset]);
+  }
+
+  async printSelectedQrs(): Promise<void> {
+    const assets = this.assets.filter((asset) => this.selectedAssetIds.has(asset.id));
+    if (!assets.length) {
+      this.errorMessage = 'Selecciona al menos un activo para imprimir su QR.';
+      this.showErrorModal = true;
+      this.changeDetector.markForCheck();
+      return;
+    }
+    await this.printQrSheet(assets);
+  }
+
+  private async printQrSheet(assets: Asset[]): Promise<void> {
+    try {
+      const labels = await Promise.all(assets.map(async (asset) => ({
+        asset,
+        dataUrl: await QRCode.toDataURL(this.qrUrl(asset), { width: 360, margin: 1, errorCorrectionLevel: 'M' })
+      })));
+      this.qrPrintLabels = labels;
+      document.body.classList.remove('printing-report', 'printing-products');
+      document.body.classList.add('printing-qr');
+      this.changeDetector.markForCheck();
+      // Espera a que Angular pinte la hoja de etiquetas antes de abrir el diálogo de impresión.
+      setTimeout(() => window.print(), 80);
+    } catch {
+      this.errorMessage = 'No se pudieron generar los códigos QR para impresión.';
+      this.showErrorModal = true;
+      this.changeDetector.markForCheck();
+    }
+  }
+
+  private qrUrl(asset: Asset): string {
+    return `${window.location.origin}${this.basePath}qr/${asset.qrToken}`;
   }
 
   conditionLabel(condition: ItemCondition): string {
@@ -768,6 +1064,10 @@ export class App implements OnInit {
       },
       error: (error: unknown) => {
         this.selectedQrDetail = null;
+        if (this.isUnauthorized(error)) {
+          this.expireSession();
+          return;
+        }
         this.errorMessage = this.errorText(error, 'No se pudo consultar el activo por QR.');
         this.showErrorModal = true;
         this.changeDetector.markForCheck();
@@ -785,22 +1085,322 @@ export class App implements OnInit {
     this.reportCategory = '';
   }
 
-  downloadExcel(): void {
-    const rows = [
-      ['Fecha', 'Producto', 'Categoría', 'Tipo', 'Cantidad', 'Registrado por', 'Entregado a', 'Motivo'],
-      ...this.filteredMovements.map((movement) => [
-        movement.movementDate ?? '',
-        movement.productName ?? '',
-        this.categoryForMovement(movement),
-        movement.type,
-        String(movement.quantity),
-        movement.userName ?? '',
-        movement.recipientName ?? '',
-        movement.reason ?? ''
-      ])
-    ];
-    const csv = '\uFEFF' + rows.map((row) => row.map((value) => this.csvCell(value)).join(',')).join('\r\n');
-    this.downloadFile(csv, 'reporte-inventario.csv', 'text/csv;charset=utf-8');
+  async downloadExcel(): Promise<void> {
+    try {
+      const XLSX = await import('xlsx');
+      const rows = this.filteredMovements.map((movement) => ({
+        'Fecha': movement.movementDate ?? '',
+        'Producto': movement.productName ?? '',
+        'Categoría': this.categoryForMovement(movement),
+        'Tipo': movement.type === 'ENTRADA' ? 'Entrada' : 'Salida',
+        'Cantidad': movement.quantity,
+        'Registrado por': movement.userName ?? '',
+        'Entregado a': movement.recipientName ?? '',
+        'Motivo': movement.reason ?? ''
+      }));
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      worksheet['!cols'] = [
+        { wch: 12 }, { wch: 30 }, { wch: 16 }, { wch: 10 }, { wch: 10 }, { wch: 22 }, { wch: 22 }, { wch: 30 }
+      ];
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Movimientos');
+      XLSX.writeFile(workbook, `reporte-movimientos-${this.today()}.xlsx`);
+    } catch {
+      this.errorMessage = 'No se pudo generar el archivo de Excel. Inténtalo de nuevo.';
+      this.showErrorModal = true;
+      this.changeDetector.markForCheck();
+    }
+  }
+
+  async exportProductsExcel(): Promise<void> {
+    try {
+      const XLSX = await import('xlsx');
+      const rows = this.filteredProducts.map((product) => ({
+        'Código': product.code,
+        'Producto': product.name,
+        'Variante': product.variant ?? '',
+        'Categoría': product.category,
+        'Tipo de seguimiento': this.trackingLabel(product.trackingType),
+        'Stock': product.stock,
+        'Stock mínimo': product.minimumStock,
+        'Unidad': product.unit,
+        'Ubicación': product.location,
+        'Estado': this.stockState(product)
+      }));
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      worksheet['!cols'] = [
+        { wch: 18 }, { wch: 32 }, { wch: 18 }, { wch: 16 }, { wch: 20 },
+        { wch: 10 }, { wch: 14 }, { wch: 10 }, { wch: 20 }, { wch: 12 }
+      ];
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Productos');
+      XLSX.writeFile(workbook, `inventario-productos-${this.today()}.xlsx`);
+    } catch {
+      this.errorMessage = 'No se pudo generar el archivo de Excel. Inténtalo de nuevo.';
+      this.showErrorModal = true;
+      this.changeDetector.markForCheck();
+    }
+  }
+
+  stockState(product: Product): string {
+    if (product.stock === 0) return 'Agotado';
+    return product.stock <= product.minimumStock ? 'Stock bajo' : 'Disponible';
+  }
+
+  openImportForm(): void {
+    this.importFileName = '';
+    this.importRows = [];
+    this.importSummary = '';
+    this.importParsing = false;
+    this.showImportForm = true;
+  }
+
+  get importReadyRows(): ImportPreviewRow[] {
+    return this.importRows.filter((row) => row.status === 'ready');
+  }
+
+  importStatusLabel(status: ImportPreviewRow['status']): string {
+    return ({ ready: 'Listo para importar', created: 'Importado', skip: 'Omitido', error: 'Con error' })[status];
+  }
+
+  async importFileChanged(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    this.importParsing = true;
+    this.importFileName = file.name;
+    this.importSummary = '';
+    this.importRows = [];
+    this.changeDetector.markForCheck();
+    try {
+      const XLSX = await import('xlsx');
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = sheetName ? workbook.Sheets[sheetName] : undefined;
+      if (!sheet) throw new Error('empty-workbook');
+      const records = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
+      this.importRows = this.parseImportRecords(records);
+      this.importSummary = this.importRows.length
+        ? `${this.importRows.length} fila(s) leídas · ${this.importReadyRows.length} lista(s) para importar.`
+        : 'El archivo no contiene filas de datos. Usa la plantilla como referencia.';
+    } catch {
+      this.importSummary = 'No se pudo leer el archivo. Verifica que sea un .xlsx, .xls o .csv válido.';
+    } finally {
+      this.importParsing = false;
+      input.value = '';
+      this.changeDetector.markForCheck();
+    }
+  }
+
+  async downloadImportTemplate(): Promise<void> {
+    try {
+      const XLSX = await import('xlsx');
+      const header = ['Código', 'Nombre', 'Categoría', 'Variante', 'Stock', 'Stock mínimo', 'Unidad', 'Ubicación', 'Tipo de seguimiento'];
+      const examples = [
+        ['', 'Taladro percutor', 'HERRAMIENTAS', 'Inalámbrico 18V', 1, 0, 'pza', 'Almacén', 'Reutilizable'],
+        ['', 'Bombilla LED 9W', 'LIMPIEZA', 'Blanca', 24, 6, 'pza', 'Bodega', 'Consumible'],
+        ['', 'Gasolina súper', 'COMBUSTIBLE', '', 100, 10, 'galón', 'Tanque', 'Combustible'],
+        ['ACT-RAD-001', 'Radio portátil', 'EQUIPO', 'VHF', 2, 0, 'pza', 'Cámaras', 'Activo']
+      ];
+      const worksheet = XLSX.utils.aoa_to_sheet([header, ...examples]);
+      worksheet['!cols'] = [
+        { wch: 18 }, { wch: 30 }, { wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 14 }, { wch: 10 }, { wch: 16 }, { wch: 20 }
+      ];
+      const guide = XLSX.utils.aoa_to_sheet([
+        ['Guía de importación masiva de productos'],
+        [],
+        ['Columna', 'Obligatoria', 'Detalle'],
+        ['Código', 'No', 'Si se omite se genera con el formato CAT-PRO-VAR-001. No puede repetirse.'],
+        ['Nombre', 'Sí', 'Nombre del producto.'],
+        ['Categoría', 'Sí', 'Ej. HERRAMIENTAS, LIMPIEZA, SEGURIDAD, OFICINA, COMBUSTIBLE, EQUIPO.'],
+        ['Variante', 'No', 'Color, modelo u otra referencia.'],
+        ['Stock', 'Sí', 'Número mayor o igual a cero. Los activos individuales deben ser enteros.'],
+        ['Stock mínimo', 'No', 'Por defecto 0.'],
+        ['Unidad', 'Sí', 'pza, caja, par, galón… (combustible obligatoriamente en galones).'],
+        ['Ubicación', 'Sí', 'Ej. Almacén, Bodega, Tanque.'],
+        ['Tipo de seguimiento', 'No', 'Consumible (por defecto) | Reutilizable | Activo | Combustible.'],
+        [],
+        ['Notas'],
+        ['• Solo se crean productos nuevos; si el código ya existe, la fila se omite.'],
+        ['• Máximo 500 productos por archivo.']
+      ]);
+      guide['!cols'] = [{ wch: 24 }, { wch: 14 }, { wch: 90 }];
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Productos');
+      XLSX.utils.book_append_sheet(workbook, guide, 'Guía');
+      XLSX.writeFile(workbook, 'plantilla-carga-productos.xlsx');
+    } catch {
+      this.errorMessage = 'No se pudo generar la plantilla. Inténtalo de nuevo.';
+      this.showErrorModal = true;
+      this.changeDetector.markForCheck();
+    }
+  }
+
+  confirmImportProducts(): void {
+    const ready = this.importReadyRows;
+    if (!ready.length) return;
+    const products = ready.map((row) => ({
+      code: row.code,
+      name: row.name,
+      category: row.category,
+      variant: row.variant,
+      stock: row.stock,
+      minimumStock: row.minimumStock,
+      location: row.location,
+      unit: row.unit,
+      trackingType: row.trackingType
+    }));
+    this.saving = true;
+    this.clearMessages();
+    this.inventoryService.bulkCreateProducts(products)
+      .pipe(timeout({ first: 120_000 }), finalize(() => {
+        this.saving = false;
+        this.changeDetector.markForCheck();
+      }))
+      .subscribe({
+        next: (results) => {
+          results.forEach((result) => {
+            const preview = ready[result.row - 1];
+            if (!preview) return;
+            preview.message = result.message;
+            preview.status = result.status === 'CREATED' ? 'created'
+              : result.status === 'SKIPPED' ? 'skip' : 'error';
+          });
+          const created = results.filter((result) => result.status === 'CREATED').length;
+          const skipped = results.filter((result) => result.status === 'SKIPPED').length;
+          const failed = results.filter((result) => result.status === 'ERROR').length;
+          const parts = [`importados: ${created}`];
+          if (skipped) parts.push(`omitidos: ${skipped}`);
+          if (failed) parts.push(`con error: ${failed}`);
+          this.importSummary = `Carga finalizada · ${parts.join(' · ')}`;
+          if (failed || skipped) {
+            this.errorMessage = `${failed} fila(s) con error y ${skipped} omitida(s). Revisa el detalle de la tabla.`;
+            this.showErrorModal = true;
+          }
+          this.successMessage = `Carga masiva finalizada. Productos importados: ${created}.`;
+          this.loadAll();
+        },
+        error: (error: unknown) => this.handleMutationError(error)
+      });
+  }
+
+  private parseImportRecords(records: Record<string, unknown>[]): ImportPreviewRow[] {
+    const takenCodes = new Set(this.products.map((product) => product.code.toLocaleUpperCase()));
+    const rows: ImportPreviewRow[] = [];
+    records.forEach((record, index) => {
+      const name = this.importCell(record, ['nombre', 'producto', 'nombredeproducto']);
+      const category = this.importCell(record, ['categoria']);
+      const variant = this.importCell(record, ['variante', 'modelo']);
+      const unit = this.importCell(record, ['unidad', 'unidadmedida']);
+      const location = this.importCell(record, ['ubicacion', 'localizacion']);
+      const stockText = this.importCell(record, ['stock', 'cantidad', 'existencia', 'existenciainicial']);
+      const minimumText = this.importCell(record, ['stockminimo', 'minimo', 'stockmin']);
+      const trackingText = this.importCell(record, ['tipodeseguimiento', 'tipo', 'seguimiento']);
+      let code = this.importCell(record, ['codigo', 'codigodeproducto']);
+      const preview: ImportPreviewRow = {
+        row: index + 1,
+        code,
+        name,
+        category,
+        variant,
+        stock: 0,
+        minimumStock: 0,
+        unit,
+        location,
+        trackingType: 'CONSUMABLE',
+        status: 'ready',
+        message: ''
+      };
+      rows.push(preview);
+      const fail = (message: string): void => {
+        preview.status = 'error';
+        preview.message = message;
+      };
+      if (!name) return fail('Falta el nombre del producto.');
+      if (!category) return fail('Falta la categoría del producto.');
+      if (!unit) return fail('Falta la unidad de medida.');
+      if (!location) return fail('Falta la ubicación.');
+      const stock = this.toImportNumber(stockText);
+      if (stock === null) return fail('El stock debe ser un número mayor o igual a cero.');
+      if (stock < 0 || stock > 999_999) return fail('El stock debe estar entre 0 y 999999.');
+      const minimum = minimumText ? this.toImportNumber(minimumText) : 0;
+      if (minimum === null || minimum < 0) return fail('El stock mínimo debe ser un número mayor o igual a cero.');
+      const trackingType = this.toTrackingType(trackingText);
+      if (!trackingType) return fail(`Tipo de seguimiento no reconocido: “${trackingText}”.`);
+      if (trackingType === 'ASSET' && !Number.isInteger(stock)) {
+        return fail('Los activos individuales requieren una existencia entera.');
+      }
+      if (trackingType === 'FUEL' && !GALLON_UNITS.includes(unit.toLocaleLowerCase())) {
+        return fail('El combustible debe medirse en galones (gal, galón…).');
+      }
+      preview.stock = stock;
+      preview.minimumStock = minimum;
+      preview.trackingType = trackingType;
+      if (!code) {
+        code = this.nextImportCode(category, name, variant, takenCodes);
+        preview.code = code;
+      } else if (code.length > 40) {
+        return fail('El código supera los 40 caracteres.');
+      } else if (takenCodes.has(code.toLocaleUpperCase())) {
+        preview.status = 'skip';
+        preview.message = `El código ${code} ya existe en el inventario o se repite en el archivo.`;
+      } else {
+        takenCodes.add(code.toLocaleUpperCase());
+      }
+    });
+    return rows;
+  }
+
+  private importCell(row: Record<string, unknown>, aliases: string[]): string {
+    for (const [key, value] of Object.entries(row)) {
+      if (aliases.includes(this.normalizeKey(key))) {
+        const text = value == null ? '' : String(value).trim();
+        if (text) return text;
+      }
+    }
+    return '';
+  }
+
+  private normalizeKey(value: string): string {
+    return String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+
+  private toImportNumber(text: string): number | null {
+    if (!text) return null;
+    let normalized = text.replace(/\s/g, '');
+    if (normalized.includes(',') && normalized.includes('.')) normalized = normalized.replace(/,/g, '');
+    else normalized = normalized.replace(',', '.');
+    const value = Number(normalized);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  private toTrackingType(text: string): TrackingType | null {
+    const key = this.normalizeKey(text);
+    if (!key) return 'CONSUMABLE';
+    if (key === 'consumable') return 'CONSUMABLE';
+    if (key === 'reusable') return 'REUSABLE';
+    if (key === 'asset') return 'ASSET';
+    if (key === 'fuel') return 'FUEL';
+    const map: Record<string, TrackingType> = {
+      consumible: 'CONSUMABLE', consumibles: 'CONSUMABLE', consumo: 'CONSUMABLE',
+      reutilizable: 'REUSABLE', reutilizables: 'REUSABLE', prestamo: 'REUSABLE', herramienta: 'REUSABLE',
+      activo: 'ASSET', activos: 'ASSET', serializado: 'ASSET', individual: 'ASSET',
+      combustible: 'FUEL'
+    };
+    return map[key] ?? null;
+  }
+
+  private nextImportCode(category: string, name: string, variant: string, taken: Set<string>): string {
+    const prefix = [category, name, variant].map((value) => this.codePart(value)).join('-');
+    let sequence = 1;
+    let code = `${prefix}-${String(sequence).padStart(3, '0')}`;
+    while (taken.has(code.toLocaleUpperCase())) {
+      sequence += 1;
+      code = `${prefix}-${String(sequence).padStart(3, '0')}`;
+    }
+    taken.add(code.toLocaleUpperCase());
+    return code;
   }
 
   printReport(): void {
@@ -808,8 +1408,18 @@ export class App implements OnInit {
       dateStyle: 'medium',
       timeStyle: 'short'
     }).format(new Date());
-    document.body.classList.remove('printing-qr');
+    document.body.classList.remove('printing-qr', 'printing-products');
     document.body.classList.add('printing-report');
+    window.print();
+  }
+
+  printProductsReport(): void {
+    this.productsReportGeneratedAt = new Intl.DateTimeFormat(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    }).format(new Date());
+    document.body.classList.remove('printing-qr', 'printing-report');
+    document.body.classList.add('printing-products');
     window.print();
   }
 
@@ -887,6 +1497,11 @@ export class App implements OnInit {
     this.assets = [];
     this.loans = [];
     this.areas = [];
+    this.selectedQrDetail = null;
+    this.selectedAsset = null;
+    this.selectedAssetQr = '';
+    this.selectedAssetIds.clear();
+    this.qrPrintLabels = [];
     this.loginError = 'La sesión expiró. Inicia sesión de nuevo para continuar.';
     this.showErrorModal = false;
     this.changeDetector.markForCheck();
@@ -914,17 +1529,4 @@ export class App implements OnInit {
     return new Date().toISOString().slice(0, 10);
   }
 
-  private downloadFile(contents: string, filename: string, type: string): void {
-    const url = URL.createObjectURL(new Blob([contents], { type }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    link.click();
-    URL.revokeObjectURL(url);
-  }
-
-  private csvCell(value: string): string {
-    const safeValue = /^\s*[=+\-@]/.test(value) ? `'${value}` : value;
-    return `"${safeValue.replaceAll('"', '""')}"`;
-  }
 }

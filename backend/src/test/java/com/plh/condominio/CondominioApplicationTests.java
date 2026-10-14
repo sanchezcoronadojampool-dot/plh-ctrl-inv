@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.plh.condominio.dto.BulkProductRowResponse;
 import com.plh.condominio.dto.LoanItemRequest;
 import com.plh.condominio.dto.LoanRequest;
 import com.plh.condominio.dto.LoanReturnItemRequest;
@@ -143,6 +145,64 @@ class CondominioApplicationTests {
 				borrower.getId(), operator.getId(), area.getId(), "Préstamo de prueba", null,
 				List.of(new LoanItemRequest(television.getId(), new BigDecimal("2147483648"),
 						ItemCondition.GOOD, List.of())))));
+	}
+
+	@Test
+	@Transactional
+	void importsProductsInBulkRowByRowWithIndependentResults() {
+		User operator = findUser("Encargado");
+		AuthenticatedUser principal = AuthenticatedUser.from(operator);
+		SecurityContextHolder.getContext().setAuthentication(
+				new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities()));
+		try {
+			var requests = List.of(
+					new ProductRequest("IMP-TEST-001", "Producto importado", "PRUEBAS", "",
+							new BigDecimal("10"), BigDecimal.ONE, "Almacén", "pza", TrackingType.CONSUMABLE),
+					new ProductRequest("IMP-TEST-001", "Duplicado en archivo", "PRUEBAS", "",
+							BigDecimal.ONE, BigDecimal.ZERO, "Almacén", "pza", TrackingType.CONSUMABLE),
+					new ProductRequest("P-1001", "Código ya existente", "PRUEBAS", "",
+							BigDecimal.ONE, BigDecimal.ZERO, "Almacén", "pza", TrackingType.CONSUMABLE),
+					new ProductRequest("IMP-TEST-002", "", "PRUEBAS", "",
+							BigDecimal.ONE, BigDecimal.ZERO, "Almacén", "pza", TrackingType.CONSUMABLE),
+					new ProductRequest("IMP-TEST-003", "Combustible mal medido", "PRUEBAS", "",
+							BigDecimal.ONE, BigDecimal.ZERO, "Almacén", "pza", TrackingType.FUEL));
+
+			var results = operationsService.createProductsBulk(requests);
+
+			assertEquals(5, results.size());
+			assertEquals(BulkProductRowResponse.STATUS_CREATED, results.get(0).status());
+			assertEquals(BulkProductRowResponse.STATUS_SKIPPED, results.get(1).status());
+			assertEquals(BulkProductRowResponse.STATUS_SKIPPED, results.get(2).status());
+			assertEquals(BulkProductRowResponse.STATUS_ERROR, results.get(3).status());
+			assertEquals(BulkProductRowResponse.STATUS_ERROR, results.get(4).status());
+			assertTrue(results.get(4).message().contains("galones"));
+			assertEquals(1, productRepository.findAll().stream()
+					.filter(product -> "IMP-TEST-001".equals(product.getCode())).count());
+			assertTrue(productRepository.findByCode("IMP-TEST-002").isEmpty());
+			assertTrue(productRepository.findByCode("IMP-TEST-003").isEmpty());
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void rejectsBulkImportWithoutRows() {
+		assertThrows(IllegalArgumentException.class, () -> operationsService.createProductsBulk(List.of()));
+	}
+
+	@Test
+	@Transactional
+	void issuesLoanWithDefaultPurposeWhenPurposeIsBlank() {
+		User operator = findUser("Encargado");
+		StorageArea area = findArea("Almacén");
+		Product tool = productRepository.findByCode("P-1002").orElseThrow();
+		var person = inventoryService.createPerson(new InventoryPersonRequest("Trabajador sin motivo", "Mantenimiento"));
+
+		LoanResponse issued = operationsService.issueLoan(new LoanRequest(
+				null, person.id(), BorrowerType.EMPLOYEE, null, operator.getId(), area.getId(),
+				"   ", null, List.of(new LoanItemRequest(tool.getId(), BigDecimal.ONE, ItemCondition.GOOD, List.of()))));
+
+		assertEquals("Préstamo de almacén", issued.purpose());
 	}
 
 	@Test

@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable } from '@angular/core';
 import { Observable, switchMap } from 'rxjs';
-import { Area, Asset, DashboardSummary, InventoryPerson, Loan, Movement, Product, QrAssetDetail, User } from './models';
+import { Area, Asset, BulkProductRow, DashboardSummary, InventoryPerson, Loan, Movement, Product, QrAssetDetail, User } from './models';
 
 @Injectable({ providedIn: 'root' })
 export class InventoryService {
@@ -44,6 +44,10 @@ export class InventoryService {
 
   deleteProduct(id: number): Observable<void> {
     return this.http.delete<void>(`${this.apiUrl}/products/${id}`);
+  }
+
+  bulkCreateProducts(products: Partial<Product>[]): Observable<BulkProductRow[]> {
+    return this.http.post<BulkProductRow[]>(`${this.apiUrl}/products/bulk`, { products });
   }
 
   getUsers(): Observable<User[]> {

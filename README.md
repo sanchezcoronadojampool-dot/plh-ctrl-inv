@@ -8,6 +8,20 @@ Las cuentas de acceso son independientes del padrón de trabajadores. Registra a
 
 Al crear un producto, el código se genera con el formato `CAT-PRO-VAR-001`: abreviaturas de tres letras de categoría, producto y variante, más el número inicial con tres dígitos. El formulario permite indicar una existencia inicial de 1 a 50; esa cantidad corresponde al stock de un solo producto y no crea claves distintas por unidad.
 
+## Exportación, carga masiva y etiquetas QR
+
+- En **Productos**, los filtros de búsqueda y categoría también aplican a la exportación: «Exportar Excel» genera un `.xlsx` con una fila por producto filtrado y «Imprimir / PDF» genera el reporte con encabezado institucional para imprimirlo o guardarlo como PDF. En **Reportes**, la exportación de movimientos también entrega un `.xlsx`.
+- Los administradores pueden cargar productos masivamente: «Importar Excel» descarga una plantilla con la guía de columnas, acepta `.xlsx` o `.csv`, muestra una vista previa fila por fila (lista, omitida o con error) y solo envía las filas válidas al confirmar. Cada fila se crea en su propia transacción, los códigos existentes o repetidos se omiten sin duplicar y un error de fila no invalida el resto del archivo (máximo 500 productos por archivo).
+- La impresión de QR usa una hoja A4 vertical con **4 columnas de etiquetas** (código, producto, serie y área): selecciona los activos con las casillas de la tabla y usa «Imprimir QR (n)», o imprime desde la ficha individual del activo.
+- Escanear un QR abre la ficha del activo en `/qr/<token>`; si no hay sesión, tras iniciar sesión la ficha se carga directamente. Los datos QR siguen exigiendo autenticación.
+
+## Préstamos rápidos
+
+- El registro de préstamos es de un solo paso: escribe quién recibe (si el nombre coincide con Personal se registra como trabajador; si no, como propietario o invitado), agrega uno o más artículos a la lista y confirma. El motivo y la fecha límite son opcionales; el motivo vacío se guarda como «Préstamo de almacén».
+- Cada préstamo abierto muestra «Devolver todo», que recibe todos los artículos pendientes en una sola operación con la condición indicada. La devolución individual preselecciona la totalidad de lo pendiente (cantidad y unidades) para confirmar con un clic.
+- La ficha QR de un activo prestado incluye «Registrar devolución de este activo» y abre la devolución correspondiente desde el escaneo.
+- Los préstamos con fecha límite vencida se marcan como **Vencido** en el listado.
+
 ## Despliegue con Docker Compose
 
 La app se publica detrás del proxy compartido en su propio hostname; no expone puertos de frontend, backend ni PostgreSQL al host.

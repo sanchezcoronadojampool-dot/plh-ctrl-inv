@@ -2,6 +2,8 @@ package com.plh.condominio.controller;
 
 import com.plh.condominio.dto.InventorySummaryDto;
 import com.plh.condominio.dto.AreaRequest;
+import com.plh.condominio.dto.BulkProductRequest;
+import com.plh.condominio.dto.BulkProductRowResponse;
 import com.plh.condominio.dto.AreaResponse;
 import com.plh.condominio.dto.AssetAssignRequest;
 import com.plh.condominio.dto.AssetRequest;
@@ -60,6 +62,11 @@ public class InventoryController {
     @PostMapping("/products")
     public ResponseEntity<ProductResponse> createProduct(@Valid @RequestBody ProductRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(inventoryService.createProduct(request));
+    }
+
+    @PostMapping("/products/bulk")
+    public ResponseEntity<List<BulkProductRowResponse>> createProductsBulk(@RequestBody BulkProductRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(operationsService.createProductsBulk(request.products()));
     }
 
     @PutMapping("/products/{id}")

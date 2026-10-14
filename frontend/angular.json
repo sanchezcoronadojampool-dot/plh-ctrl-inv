@@ -32,6 +32,10 @@
             ],
             "styles": [
               "src/styles.scss"
+            ],
+            "allowedCommonJsDependencies": [
+              "qrcode",
+              "xlsx"
             ]
           },
           "configurations": {

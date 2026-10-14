@@ -116,6 +116,42 @@ export interface QrAssetDetail {
   history: Movement[];
 }
 
+export interface BulkProductRow {
+  row: number;
+  code: string;
+  name: string;
+  status: 'CREATED' | 'SKIPPED' | 'ERROR';
+  message: string;
+}
+
+export type ImportRowStatus = 'ready' | 'created' | 'skip' | 'error';
+
+export interface ImportPreviewRow {
+  row: number;
+  code: string;
+  name: string;
+  category: string;
+  variant: string;
+  stock: number;
+  minimumStock: number;
+  unit: string;
+  location: string;
+  trackingType: TrackingType;
+  status: ImportRowStatus;
+  message: string;
+}
+
+export interface LoanLineDraft {
+  productId: number;
+  quantity: number;
+  assetIds: number[];
+}
+
+export interface QrPrintLabel {
+  asset: Asset;
+  dataUrl: string;
+}
+
 export interface DashboardSummary {
   totalProducts: number;
   stocksByUnit: Record<string, number>;

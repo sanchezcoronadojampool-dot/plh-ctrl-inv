@@ -16,10 +16,17 @@ describe('App', () => {
     getAreas: () => of([{ id: 1, name: 'Almacén' }]),
     getAssets: () => of([]),
     getLoans: () => of([]),
+    getAssetByQr: vi.fn(() => of({
+      asset: { id: 4, qrToken: 'abc-123', assetCode: 'RAD-001', productId: 1, productName: 'Radio',
+        productCode: 'EQ-RAD-001', areaId: 1, areaName: 'Almacén', condition: 'GOOD' as const, status: 'ON_LOAN' as const },
+      history: []
+    })),
     createProduct: vi.fn(() => of({})),
     createMovement: vi.fn(() => of({})),
     createPerson: vi.fn(() => of({})),
     createLoan: vi.fn(() => of({})),
+    returnLoan: vi.fn(() => of({})),
+    bulkCreateProducts: vi.fn(() => of([])),
     createAsset: vi.fn(() => throwError(() => ({
       error: { message: 'Registra primero la existencia de compra del producto; no puedes etiquetar más unidades que las existentes.' }
     })))
@@ -247,5 +254,167 @@ describe('App', () => {
 
     expect(app.areas).toEqual([{ id: 1, name: 'Almacén' }]);
     expect(app.loadErrors.some((message) => message.includes('Productos'))).toBe(true);
+  });
+
+  it('opens the scanned QR detail right after signing in', () => {
+    vi.spyOn(inventoryService, 'getCurrentUser').mockReturnValue(throwError(() => ({ status: 401 })));
+    window.history.pushState({}, '', '/qr/abc-123');
+    try {
+      const fixture = TestBed.createComponent(App);
+      fixture.detectChanges();
+      const app = fixture.componentInstance;
+      expect(app.currentUser).toBeNull();
+
+      app.loginEmail = 'admin@example.com';
+      app.loginPassword = 'valid-password';
+      app.login();
+      fixture.detectChanges();
+
+      expect(app.currentUser?.email).toBe('admin@example.com');
+      expect(app.activeSection).toBe('assets');
+      expect(app.selectedQrDetail?.asset.assetCode).toBe('RAD-001');
+      expect((fixture.nativeElement as HTMLElement).textContent).toContain('RAD-001');
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('renders the selected QR labels as a printable sheet that cleans up afterwards', async () => {
+    const print = vi.spyOn(window, 'print').mockImplementation(() => undefined);
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const app = fixture.componentInstance;
+    app.selectedAsset = { id: 4, qrToken: 'abc-123', assetCode: 'RAD-001', productId: 1,
+      productName: 'Radio', productCode: 'EQ-RAD-001', condition: 'GOOD', status: 'ON_LOAN' };
+
+    await app.printQr();
+
+    expect(app.qrPrintLabels).toHaveLength(1);
+    expect(app.qrPrintLabels[0].dataUrl).toContain('data:image/png');
+    expect(document.body.classList.contains('printing-qr')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(print).toHaveBeenCalledOnce();
+
+    window.dispatchEvent(new Event('afterprint'));
+    fixture.detectChanges();
+    expect(app.qrPrintLabels).toHaveLength(0);
+    expect(document.body.classList.contains('printing-qr')).toBe(false);
+  });
+
+  it('issues a loan by typing only the recipient name and adding articles to the list', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const app = fixture.componentInstance;
+    app.currentUser = { id: 1, fullName: 'Administradora', jobTitle: 'Administradora',
+      role: 'ADMIN', email: 'admin@example.com' };
+    app.products = [{ id: 9, code: 'TOO-MAR-GEN-001', name: 'Martillo', category: 'HERRAMIENTAS',
+      stock: 5, minimumStock: 0, location: 'Almacén', unit: 'pza', trackingType: 'REUSABLE' }];
+    app.users = [{ id: 27, fullName: 'Trabajador sin cuenta', jobTitle: 'Mantenimiento' }];
+    app.areas = [{ id: 1, name: 'Almacén' }];
+    app.startLoan();
+    app.loanRecipientQuery = 'trabajador sin cuenta';
+    app.loanProductId = 9;
+
+    app.addLoanLine();
+    expect(app.loanLines).toHaveLength(1);
+    expect(app.loanLines[0]).toEqual({ productId: 9, quantity: 1, assetIds: [] });
+
+    app.issueLoan();
+
+    expect(inventoryService.createLoan).toHaveBeenCalledWith(expect.objectContaining({
+      borrowerType: 'EMPLOYEE', borrowerPersonId: 27, borrowerName: null, areaId: 1,
+      items: [expect.objectContaining({ productId: 9, quantity: 1 })]
+    }));
+    expect(app.showLoanForm).toBe(false);
+    expect(app.loanLines).toHaveLength(0);
+  });
+
+  it('treats an unknown recipient name as an owner without blocking the loan', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const app = fixture.componentInstance;
+    app.currentUser = { id: 1, fullName: 'Administradora', jobTitle: 'Administradora',
+      role: 'ADMIN', email: 'admin@example.com' };
+    app.products = [{ id: 9, code: 'TOO-MAR-GEN-001', name: 'Martillo', category: 'HERRAMIENTAS',
+      stock: 5, minimumStock: 0, location: 'Almacén', unit: 'pza', trackingType: 'REUSABLE' }];
+    app.areas = [{ id: 1, name: 'Almacén' }];
+    app.startLoan();
+    app.loanRecipientQuery = 'Propietaria de la casa 12';
+    app.loanProductId = 9;
+    app.addLoanLine();
+
+    expect(app.recipientPreview).toContain('propietario');
+    app.issueLoan();
+
+    expect(inventoryService.createLoan).toHaveBeenCalledWith(expect.objectContaining({
+      borrowerType: 'OWNER', borrowerPersonId: null, borrowerName: 'Propietaria de la casa 12'
+    }));
+  });
+
+  it('returns every pending line of a loan in a single request', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const app = fixture.componentInstance;
+    app.currentUser = { id: 1, fullName: 'Administradora', jobTitle: 'Administradora',
+      role: 'ADMIN', email: 'admin@example.com' };
+    app.areas = [{ id: 1, name: 'Almacén' }, { id: 2, name: 'Taller' }];
+    const loan = {
+      id: 7, loanNumber: 'PLH-TEST01', borrowerId: undefined, borrowerType: 'EMPLOYEE' as const,
+      borrowerName: 'Operario', issuedById: 1, issuedByName: 'Administradora',
+      areaId: 2, areaName: 'Taller', purpose: 'Mantenimiento', issuedAt: '2026-10-01',
+      status: 'OPEN' as const,
+      items: [
+        { id: 11, productId: 9, productName: 'Martillo', productCode: 'TOO-001', quantity: 3,
+          returnedQuantity: 1, outstandingQuantity: 2, conditionOut: 'GOOD' as const, assets: [] },
+        { id: 12, productId: 10, productName: 'Radio', productCode: 'ACT-001', quantity: 1,
+          returnedQuantity: 0, outstandingQuantity: 1, conditionOut: 'GOOD' as const,
+          assets: [{ id: 9, qrToken: 'tok', assetCode: 'RAD-009', productId: 10, productName: 'Radio',
+            productCode: 'ACT-001', condition: 'GOOD' as const, status: 'ON_LOAN' as const }] }
+      ]
+    };
+    app.loans = [loan];
+
+    expect(app.hasPendingLines(loan)).toBe(true);
+    app.startReturnAll(loan);
+    expect(app.returnAllAreaId).toBe(2);
+    app.saveReturnAll();
+
+    expect(inventoryService.returnLoan).toHaveBeenCalledWith(7, expect.objectContaining({
+      areaId: 2,
+      items: [
+        { loanLineId: 11, quantity: 2, condition: 'GOOD', assetIds: [] },
+        { loanLineId: 12, quantity: 1, condition: 'GOOD', assetIds: [9] }
+      ]
+    }));
+    expect(app.showReturnAll).toBe(false);
+  });
+
+  it('previews bulk import rows from an Excel file before sending them', async () => {
+    const XLSX = await import('xlsx');
+    const worksheet = XLSX.utils.aoa_to_sheet([
+      ['Código', 'Nombre', 'Categoría', 'Variante', 'Stock', 'Stock mínimo', 'Unidad', 'Ubicación', 'Tipo de seguimiento'],
+      ['', 'Taladro percutor', 'HERRAMIENTAS', '', 2, 1, 'pza', 'Almacén', 'Reutilizable'],
+      ['', '', 'LIMPIEZA', '', 4, 0, 'pza', 'Bodega', 'Consumible'],
+      ['P-001', 'Duplicado', 'LIMPIEZA', '', 1, 0, 'pza', 'Bodega', 'Consumible']
+    ]);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Productos');
+    const buffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const app = fixture.componentInstance;
+
+    await app.importFileChanged({
+      target: { files: [new File([buffer], 'productos.xlsx')], value: '' }
+    } as unknown as Event);
+
+    expect(app.importRows).toHaveLength(3);
+    expect(app.importRows[0].status).toBe('ready');
+    expect(app.importRows[0].trackingType).toBe('REUSABLE');
+    expect(app.importRows[0].code).toBe('HER-TAL-GEN-001');
+    expect(app.importRows[1].status).toBe('error');
+    expect(app.importRows[1].message).toContain('nombre');
+    expect(app.importRows[2].status).toBe('skip');
+    expect(app.importReadyRows).toHaveLength(1);
   });
 });
